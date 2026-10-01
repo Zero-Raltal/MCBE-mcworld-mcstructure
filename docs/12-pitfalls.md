@@ -25,19 +25,22 @@ for (const layer of sub.layers) {
 
 详见 `06-subchunk.md` §3。
 
-#### 2. block_position_data 键写成扁平索引
+#### 2. ⚠️ `block_position_data` 键写成 `"sx,sy,sz"`
 
 **后果**：**所有**方块实体 NBT 丢失。命令方块指令、告示牌文字、箱子物品都没了。
 
 **修复**：
 
 ```javascript
-// ❌ 键是 "0" / "1" / "2"
-blockPositionData[String(structIdx)] = entries;
-
-// ✅ 键是 "sx,sy,sz"
+// ❌ 键是 "8,1,8"（坐标字符串）
 blockPositionData[sx + ',' + sy + ',' + sz] = entries;
+
+// ✅ 键是 String(structIdx)（扁平索引）
+const structIdx = (sx * sizeY + sy) * sizeZ + sz;
+blockPositionData[String(structIdx)] = entries;
 ```
+
+**⚠️ 重要**：社区广泛流传"键必须是 `'x,y,z'`"，这是**错误**的。游戏用 `Number(key)` 得到索引，`Number("8,1,8")` = `NaN`，静默跳过。
 
 详见 `07-blockentity.md` §3。
 
@@ -183,11 +186,11 @@ encodeHandle(offset, blockContentBytes.length);
 
 ### 轻微（会错位或丢失部分数据）
 
-#### 13. BE 里 x/y/z 坐标与键不一致
+#### 13. BE 里 x/y/z 坐标与结构坐标系不一致
 
 **后果**：BE 错位或丢失。
 
-**修复**：统一用相对坐标（mcstructure 侧）。
+**修复**：mcstructure 侧统一用结构相对坐标。
 
 详见 `07-blockentity.md` §7.3。
 
@@ -207,13 +210,23 @@ const len = readI32();
 
 详见 `01-nbt.md` §1.3。
 
-#### 15. BE 内 x/y/z 写成了世界坐标（mcstructure 方向）
+#### 15. 读取 palette 时误用数组方法
 
-**后果**：游戏按相对坐标匹配，导致丢。
+**后果**：`p.find is not a function` 报错。
 
-**修复**：写相对坐标。
+**修复**：
 
-详见 `07-blockentity.md` §7.3。
+```javascript
+// ❌ 错误（p 是对象，不是数组）
+const name = p.find(x => x.name === 'name').value.value;
+
+// ✅ 正确
+const name = p.name.value;
+```
+
+**原因**：写入时 palette 条目是数组 `[{name, type, value}, ...]`，读取时是对象 `{name: {type, value}, ...}`。两种形态不一致。
+
+详见 `09-mcstructure.md` §5.3。
 
 #### 16. Layer 1 palette 全空气时仍写层
 
@@ -255,7 +268,7 @@ const writeLayers = (l1.length > 0) ? [l0, l1] : [l0];
 |------|------|------|
 | 游戏提示"升级世界" | `lastOpenedWithVersion` 不是 List\<Int\> | `08` §2.2 |
 | 存档加载失败 | Footer 魔数错误 / MANIFEST 格式错误 | `04` §7 |
-| 有方块无指令 | `block_position_data` 键不是 `"sx,sy,sz"` | `07` §3.4 |
+| **有方块无指令** | **`block_position_data` 键不是扁平索引** | `07` §3 |
 | 有方块但位置错乱 | 索引顺序错（XZY vs YZX） | `06` §5 / `09` §3.3 |
 | 整个区块丢失 | 子区块版本不是 9，或 bits 不是 2 的幂 | `06` §2 / §4.3 |
 | 命令方块变石头 | 调色板 NBT 结构错误 | `06` §7 |
@@ -271,14 +284,42 @@ const writeLayers = (l1.length > 0) ? [l0, l1] : [l0];
 | SSTable 解析失败 | 元索引块和索引块顺序颠倒 | `04` §2 |
 | 部分数据读成垃圾 | BlockHandle size 含尾部 | `04` §3.2 |
 | NBT 解析异常 | TAG_String 长度用错 | `01` §1.3 |
+| `p.find is not a function` | 读取 palette 时误用数组方法 | `09` §5.3 |
 
 ## 3. 预防性检查代码
 
-### 3.1 NBT 类型检查
+### 3.1 block_position_data 键格式
+
+```javascript
+function checkBlockPositionData(bpd, sizeY, sizeZ) {
+    for (const key of Object.keys(bpd)) {
+        // ✅ 应该是纯数字字符串
+        if (!/^\d+$/.test(key)) {
+            console.warn('block_position_data 键格式错误:', key, '（应该是纯数字字符串）');
+            continue;
+        }
+
+        // 反推坐标
+        const structIdx = parseInt(key, 10);
+        const sx = Math.floor(structIdx / (sizeY * sizeZ));
+        const rem = structIdx % (sizeY * sizeZ);
+        const sy = Math.floor(rem / sizeZ);
+        const sz = rem % sizeZ;
+
+        console.log('  "' + key + '" → (' + sx + ',' + sy + ',' + sz + ')');
+
+        const entry = bpd[key];
+        if (!entry.value || !entry.value.block_entity_data) {
+            console.warn('  缺少 block_entity_data');
+        }
+    }
+}
+```
+
+### 3.2 NBT 类型检查
 
 ```javascript
 function checkNbtString(data, pos) {
-    // 检查 TAG_String 的长度字段
     const len = new DataView(data.buffer, data.byteOffset + pos).getUint16(0, true);
     if (len > 100000) {
         console.warn('可能的 NBT 长度异常:', len);
@@ -287,7 +328,7 @@ function checkNbtString(data, pos) {
 }
 ```
 
-### 3.2 SubChunk 完整性检查
+### 3.3 SubChunk 完整性检查
 
 ```javascript
 function checkSubChunk(sub) {
@@ -302,22 +343,6 @@ function checkSubChunk(sub) {
         }
     }
     return true;
-}
-```
-
-### 3.3 BE 完整性检查
-
-```javascript
-function checkBlockPositionData(bpd) {
-    for (const key of Object.keys(bpd)) {
-        if (!/^-?\d+,-?\d+,-?\d+$/.test(key)) {
-            console.warn('block_position_data 键格式错误:', key);
-        }
-        const entry = bpd[key];
-        if (!entry.value || !entry.value.block_entity_data) {
-            console.warn('缺少 block_entity_data:', key);
-        }
-    }
 }
 ```
 
@@ -345,41 +370,45 @@ function checkLevelDat(root) {
 
 ## 4. 附录：常见错误的完整示例
 
-### 4.1 错误的 block_position_data
+### 4.1 ❌ 错误的 block_position_data
 
 ```javascript
-// ❌ 错误：键是整数
+// ❌ 错误：键是坐标字符串
 const bpEntries = [
-    { name: '0', type: 10, value: [
+    { name: '8,1,8', type: 10, value: [
         { name: 'block_entity_data', type: 10, value: [
             { name: 'id', type: 8, value: 'CommandBlock' },
             { name: 'Command', type: 8, value: 'say hello' }
         ]}
-    ]},
-    { name: '1', type: 10, value: [...] }
+    ]}
 ];
 
 // 游戏读不到，所有命令方块变成空
+// 原因：Number("8,1,8") = NaN
 ```
 
-### 4.2 正确的写法
+### 4.2 ✅ 正确的写法
 
 ```javascript
-// ✅ 正确：键是 "sx,sy,sz"
+// ✅ 正确：键是扁平索引字符串
+const sizeY = 4, sizeZ = 16;
+const sx = 8, sy = 1, sz = 8;
+const structIdx = (sx * sizeY + sy) * sizeZ + sz;   // = 536
+
 const bpEntries = [
-    { name: '3,5,-2', type: 10, value: [
+    { name: String(structIdx), type: 10, value: [   // "536"
         { name: 'block_entity_data', type: 10, value: [
             { name: 'id', type: 8, value: 'CommandBlock' },
             { name: 'Command', type: 8, value: 'say hello' },
-            { name: 'x', type: 3, value: 3 },
-            { name: 'y', type: 3, value: 5 },
-            { name: 'z', type: 3, value: -2 }
+            { name: 'x', type: 3, value: sx },          // 8（相对坐标）
+            { name: 'y', type: 3, value: sy },          // 1
+            { name: 'z', type: 3, value: sz }           // 8
         ]}
     ]}
 ];
 ```
 
-### 4.3 错误的 SubChunk 索引
+### 4.3 ❌ 错误的 SubChunk 索引
 
 ```javascript
 // ❌ 错误：YZX 顺序
@@ -392,7 +421,7 @@ const idx = lx * 16 + ly * 256 + lz * 4096;
 const idx = lx * 256 + lz * 16 + ly;
 ```
 
-### 4.4 错误的 mcstructure 索引
+### 4.4 ❌ 错误的 mcstructure 索引
 
 ```javascript
 // ❌ 错误：XZY 顺序
@@ -403,6 +432,16 @@ const structIdx = sz * sizeX * sizeY + sy * sizeX + sx;
 
 // ✅ 正确：XYZ 顺序
 const structIdx = (sx * sizeY + sy) * sizeZ + sz;
+```
+
+### 4.5 ❌ 读取 palette 时误用数组方法
+
+```javascript
+// ❌ 错误（parseNbt 后 palette 条目是对象）
+const name = p.find(x => x.name === 'name').value.value;
+
+// ✅ 正确
+const name = p.name.value;
 ```
 
 ## 5. 自检清单
