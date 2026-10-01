@@ -17,8 +17,8 @@
 | 层数 | layerCount 可 > 1 | 固定 2 层 |
 | 空气 | 不存或存 palette | palette[0] 通常是 air |
 | 方块实体 | 挂在 chunk 的 0x31 | 挂在 block_position_data |
+| BE 键 | 无键（按坐标匹配） | **扁平索引字符串** |
 | 光照/生物群系 | 有独立字段 | 无 |
-| 实体（0x32） | 有 | 有（一般空） |
 
 ### 1.2 需要转换的关键点
 
@@ -27,16 +27,16 @@
 1. 扫描所有子区块，找到 **非空气内容范围**（min/max 坐标）
 2. 把每个子区块的方块按 XZY → XYZ 转换
 3. 展开成稠密数组
-4. BE 从世界坐标 → 相对坐标
-5. BE 的键从"无键" → `"sx,sy,sz"` 字符串
+4. BE 从世界坐标 → 相对坐标，键从"无键" → **`String(structIdx)`**
+5. BE 的 x/y/z 从世界坐标 → 相对坐标
 
 **mcstructure → mcworld**：
 
 1. 遍历结构的每个方块，按世界坐标分组到 chunk
-2. 按 XZY → XYZ 转换
+2. 按 XZY → XYZ 转换（反向）
 3. 每个 chunk 内的方块按 subY 分组成 SubChunk
 4. BE 从相对坐标 → 世界坐标
-5. BE 按 chunk 分组，拼成一条 0x31
+5. BE 从键（扁平索引）反推坐标 → 按 chunk 分组
 
 ### 1.3 数据丢失风险
 
@@ -240,12 +240,15 @@ function step5_collectBlocks(subChunkMap, bounds, ignoreGround) {
 }
 ```
 
-### 2.5 Step 6: 收集 BE
+### 2.5 Step 6: 收集 BE（**关键**）
 
 ```javascript
 function step6_collectBE(beBufList, bounds) {
     const { x1, x2, y1, y2, z1, z2 } = bounds;
-    const blockPositionData = {};
+    const sizeY = y2 - y1 + 1;
+    const sizeZ = z2 - z1 + 1;
+
+    const blockPositionData = {};   // { [String(structIdx)]: entries }
     let beTotal = 0, beKept = 0, beFail = 0;
 
     for (const beBuf of beBufList) {
@@ -269,7 +272,11 @@ function step6_collectBE(beBufList, bounds) {
                     continue;
                 }
 
+                // 世界坐标 → 结构相对坐标
                 const sx = bx - x1, sy = by - y1, sz = bz - z1;
+
+                // ★★★ 关键：计算扁平索引 ★★★
+                const structIdx = (sx * sizeY + sy) * sizeZ + sz;
 
                 const entryList = parsedToWriterEntries(be);
                 for (const ent of entryList) {
@@ -278,8 +285,8 @@ function step6_collectBE(beBufList, bounds) {
                     else if (ent.name === 'z' && ent.type === 3) ent.value = sz;
                 }
 
-                // ★ 键必须是 "sx,sy,sz"
-                blockPositionData[sx + ',' + sy + ',' + sz] = entryList;
+                // ★★★ 键是 String(structIdx) ★★★
+                blockPositionData[String(structIdx)] = entryList;
                 beKept++;
             } catch (e) { beFail++; break; }
         }
@@ -319,7 +326,7 @@ function step7to9(blocksResult, beResult, bounds) {
 
     const bpEntries = Object.keys(blockPositionData).map(function(key) {
         return {
-            name: key,
+            name: key,                     // "536"
             type: 10,
             value: [
                 { name: 'block_entity_data', type: 10, value: blockPositionData[key] }
@@ -356,22 +363,16 @@ function step7to9(blocksResult, beResult, bounds) {
 async function mcworldToMcstructure(file, options) {
     const { ignoreGround = false } = options || {};
 
-    // Step 1-3
     const { subChunkMap, beBufList } = await step1to3(file);
 
-    // Step 4
     const bounds = step4_scanRange(subChunkMap, ignoreGround);
     if (bounds.x1 === Infinity) {
         throw new Error('未找到任何非地面内容');
     }
 
-    // Step 5
     const blocksResult = step5_collectBlocks(subChunkMap, bounds, ignoreGround);
-
-    // Step 6
     const beResult = step6_collectBE(beBufList, bounds);
 
-    // Step 7-9
     return step7to9(blocksResult, beResult, bounds);
 }
 ```
@@ -494,7 +495,7 @@ function step3_groupBlocks(parsed, px, py, pz) {
 }
 ```
 
-### 3.4 Step 4: 处理 BE
+### 3.4 Step 4: 处理 BE（**关键**）
 
 ```javascript
 function step4_processBE(parsed, chunkGroups, px, py, pz) {
@@ -524,11 +525,16 @@ function step4_processBE(parsed, chunkGroups, px, py, pz) {
         if (!beData.block_entity_data || !beData.block_entity_data.value) continue;
         const be = beData.block_entity_data.value;
 
+        // ★★★ 从键（扁平索引）反推结构相对坐标 ★★★
         let sx = null, sy = null, sz = null;
-        const cm = key.match(/^(-?\d+),\s*(-?\d+),\s*(-?\d+)$/);
-        if (cm) {
-            sx = parseInt(cm[1]); sy = parseInt(cm[2]); sz = parseInt(cm[3]);
+        const structIdx = parseInt(key, 10);
+        if (!isNaN(structIdx)) {
+            sx = Math.floor(structIdx / (sizeY * sizeZ));
+            const rem = structIdx % (sizeY * sizeZ);
+            sy = Math.floor(rem / sizeZ);
+            sz = rem % sizeZ;
         } else if (be.x && be.y && be.z) {
+            // 兜底：如果键不是数字，从 BE 内的 x/y/z 拿
             sx = Number(be.x.value);
             sy = Number(be.y.value);
             sz = Number(be.z.value);
@@ -537,8 +543,8 @@ function step4_processBE(parsed, chunkGroups, px, py, pz) {
 
         // 补全 id
         if (!be.id) {
-            const structIdx = (sx * sizeY + sy) * sizeZ + sz;
-            const palIdx = blockIndices0[structIdx];
+            const idx2 = (sx * sizeY + sy) * sizeZ + sz;
+            const palIdx = blockIndices0[idx2];
             if (palIdx >= 0) {
                 const bn = palette[palIdx].name.value;
                 const inferred = BLOCK_TO_BE_ID[bn];
@@ -546,7 +552,7 @@ function step4_processBE(parsed, chunkGroups, px, py, pz) {
             }
         }
 
-        // 世界坐标
+        // 结构相对坐标 → 世界坐标
         const worldX = px + sx, worldY = py + sy, worldZ = pz + sz;
 
         const beEntries = parsedToWriterEntries(be);
@@ -680,17 +686,7 @@ async function mcstructureToMcworld(file, options) {
 
 ## 4. 数据完整性检查
 
-### 4.1 转换前后对比
-
-```javascript
-function verifyConversion(original, converted) {
-    // 检查方块数量
-    // 检查 BE 数量
-    // 检查关键方块（命令方块、告示牌）
-}
-```
-
-### 4.2 关键点自检
+### 4.1 关键点自检
 
 **mcworld → mcstructure**：
 
@@ -699,6 +695,7 @@ function verifyConversion(original, converted) {
 - [ ] 命令方块有 `Command` 字段
 - [ ] 告示牌有 `FrontText` / `BackText`
 - [ ] 水面、雪、草在 layer 1
+- [ ] `block_position_data` 的键是扁平索引字符串（"536"），不是 "8,1,8"
 
 **mcstructure → mcworld**：
 
@@ -706,6 +703,7 @@ function verifyConversion(original, converted) {
 - [ ] 每个 chunk 有 `0x31`
 - [ ] 每个 chunk 有 7 个元数据键
 - [ ] `0x31` 值 < 32 KB
+- [ ] BE 内的 x/y/z 是世界坐标
 
 ## 5. 常见转换错误
 
@@ -720,17 +718,25 @@ function verifyConversion(original, converted) {
 - mcworld 侧：`lx * 256 + lz * 16 + ly`（XZY）
 - mcstructure 侧：`(sx * sizeY + sy) * sizeZ + sz`（XYZ）
 
-### 5.2 BE 丢失
+### 5.2 ⚠️ BE 丢失（**最常遇到**）
 
 **症状**：方块对，但命令方块是空、告示牌是空。
 
 **病因**：
 
-1. `block_position_data` 键写成扁平索引
+1. `block_position_data` 键写成 `"8,1,8"` 坐标格式（应该用 `"536"` 扁平索引）
 2. 没包 `block_entity_data`
 3. BE 内 x/y/z 是世界坐标而不是相对坐标
 
-**排查**：用 NBT 查看器打开 `.mcstructure` 看键格式。
+**排查**：用 NBT 查看器打开 `.mcstructure`，看 `block_position_data` 的键：
+
+```
+✅ 正确：
+  "536": ...
+
+❌ 错误：
+  "8,1,8": ...
+```
 
 ### 5.3 水面丢失
 
@@ -791,7 +797,7 @@ for (let i = 0; i < ldbFiles.length; i++) {
 - [ ] 处理了 layer 0 和 layer 1
 - [ ] `getBitValue` 有 bits=0 短路
 - [ ] 索引公式是 `(sx * sizeY + sy) * sizeZ + sz`
-- [ ] `block_position_data` 键是 `"sx,sy,sz"`
+- [ ] `block_position_data` 键是 `String(structIdx)`
 - [ ] BE 内 x/y/z 是相对坐标
 - [ ] 内存估算合理（< 1000 万方块）
 
