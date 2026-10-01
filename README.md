@@ -8,7 +8,7 @@
 
 [![Minecraft](https://img.shields.io/badge/Minecraft-Bedrock-62B47A?style=flat-square)](https://www.minecraft.net/)
 [![Version](https://img.shields.io/badge/Version-1.19.10+-blue?style=flat-square)]()
-[![License](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey?style=flat-square)](./LICENSE)
+[![License](https://img.shields.io/badge/License-MIT%204.0-lightgrey?style=flat-square)](./LICENSE)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A514-339933?style=flat-square&logo=node.js&logoColor=white)]()
 [![Browser](https://img.shields.io/badge/Browser-UMD-orange?style=flat-square)]()
 
