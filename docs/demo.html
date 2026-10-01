@@ -7,6 +7,7 @@
   :root {
     --bg: #fafafa; --card: #fff; --border: #ddd;
     --primary: #4CAF50; --primary-hover: #45a049;
+    --accent: #2196F3; --accent-hover: #1976D2;
     --danger: #d32f2f; --text: #222; --muted: #666;
     --code-bg: #1e1e1e; --code-fg: #d4d4d4;
   }
@@ -23,7 +24,13 @@
     background: var(--card); border: 1px solid var(--border); border-radius: 8px;
     padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem;
   }
+  .card.convert { border-color: var(--accent); border-width: 2px; }
   .card h2 { margin: 0; font-size: 1.05rem; color: #333; }
+  .card h2 .badge {
+    display: inline-block; background: var(--accent); color: #fff;
+    padding: 0.1rem 0.5rem; border-radius: 3px; font-size: 0.75rem;
+    margin-left: 0.4rem; font-weight: normal; vertical-align: middle;
+  }
   .card p { margin: 0; font-size: 0.85rem; color: var(--muted); }
   button {
     padding: 0.6rem 1.1rem; font-size: 0.95rem; cursor: pointer;
@@ -32,10 +39,21 @@
   }
   button:hover:not(:disabled) { background: var(--primary-hover); }
   button:disabled { background: #ccc; cursor: not-allowed; }
+  button.accent { background: var(--accent); }
+  button.accent:hover:not(:disabled) { background: var(--accent-hover); }
   input[type="file"] {
     font-size: 0.85rem; padding: 0.4rem;
     border: 1px solid var(--border); border-radius: 4px; background: #fafafa;
   }
+  input[type="text"], input[type="number"] {
+    font-size: 0.85rem; padding: 0.4rem;
+    border: 1px solid var(--border); border-radius: 4px;
+    width: 100%;
+  }
+  .field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; }
+  .field label { color: var(--muted); }
+  .checkbox-row { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+  .checkbox-row input[type="checkbox"] { margin: 0; }
   #log {
     margin-top: 1.5rem; background: var(--code-bg); color: var(--code-fg);
     padding: 1rem; border-radius: 8px;
@@ -59,13 +77,14 @@
   .log-error { color: #f48771; }
   .log-ok { color: #6a9955; }
   .log-dim { color: #808080; }
+  .log-accent { color: #569cd6; }
 </style>
 </head>
 <body>
 
 <h1>minecraft-bedrock-codec · 浏览器 Demo</h1>
 <p class="subtitle">
-  纯前端运行 <code>examples/</code> 下的 4 个示例 ·
+  纯前端运行 <code>examples/</code> 下的所有示例 ·
   依赖：<code>jszip</code> + <code>pako</code>（CDN） + <code>../examples/utils.js</code>
 </p>
 
@@ -95,6 +114,34 @@
     <h2>④ 生成 .mcstructure</h2>
     <p>16×4×16 石头平台 + 红石控制命令方块 + 上方石头按钮。</p>
     <button id="btnWriteStruct">生成并下载</button>
+  </div>
+
+  <div class="card convert">
+    <h2>⑤ mcworld → mcstructure <span class="badge">转换器</span></h2>
+    <p>把一个完整存档里的结构导出为 mcstructure。会丢失光照、生物群系、实体等。</p>
+    <input type="file" id="fileConvertW2S" accept=".mcworld,.zip">
+    <div class="checkbox-row">
+      <input type="checkbox" id="ignoreGroundW2S">
+      <label for="ignoreGroundW2S">忽略超平坦地面（bedrock/dirt/grass 等）</label>
+    </div>
+    <button id="btnConvertW2S" class="accent" disabled>转换并下载 .mcstructure</button>
+  </div>
+
+  <div class="card convert">
+    <h2>⑥ mcstructure → mcworld <span class="badge">转换器</span></h2>
+    <p>把结构文件生成一个平坦世界的 mcworld。会覆盖放置区域的方块。</p>
+    <input type="file" id="fileConvertS2W" accept=".mcstructure">
+    <div class="field">
+      <label>世界名称</label>
+      <input type="text" id="s2wWorldName" value="Structure World">
+    </div>
+    <div class="field">
+      <label>放置原点 X / Y / Z</label>
+      <input type="number" id="s2wX" value="0" placeholder="X">
+      <input type="number" id="s2wY" value="-60" placeholder="Y">
+      <input type="number" id="s2wZ" value="0" placeholder="Z">
+    </div>
+    <button id="btnConvertS2W" class="accent" disabled>转换并下载 .mcworld</button>
   </div>
 
 </div>
@@ -135,7 +182,7 @@ function hr() { logRaw('<span class="log-dim">───────────�
 document.getElementById('btnClearLog').onclick = clearLog;
 
 // ============================================================
-// 下载工具
+// 工具函数
 // ============================================================
 function download(bytes, filename) {
     const blob = new Blob([bytes], { type: 'application/octet-stream' });
@@ -148,11 +195,10 @@ function download(bytes, filename) {
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-
-// ============================================================
-// 通用：构造命令方块 BE（结构相对坐标）
-// ============================================================
-function makeCommandBlockBE(sx, sy, sz) {
+function yieldToUI() {
+    return new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+}
+function makeCommandBlockBEEntries(sx, sy, sz) {
     return [
         { name: 'id', type: 8, value: 'CommandBlock' },
         { name: 'x', type: 3, value: sx },
@@ -170,11 +216,19 @@ function makeCommandBlockBE(sx, sy, sz) {
         { name: 'TickDelay', type: 3, value: 0 },
         { name: 'TrackOutput', type: 1, value: 1 },
         { name: 'Version', type: 3, value: 19 },
-        { name: 'auto', type: 1, value: 0 },           // 0 = 红石控制
+        { name: 'auto', type: 1, value: 0 },
         { name: 'conditionMet', type: 1, value: 0 },
         { name: 'powered', type: 1, value: 0 }
     ];
 }
+
+const GROUND_BLOCKS = new Set([
+    'minecraft:air', 'minecraft:bedrock', 'minecraft:dirt', 'minecraft:grass_block',
+    'minecraft:stone', 'minecraft:deepslate', 'minecraft:podzol', 'minecraft:snow',
+    'minecraft:snow_layer', 'minecraft:sand', 'minecraft:gravel', 'minecraft:water'
+]);
+
+const MAX_TOTAL_BLOCKS = 10000000;   // 1000 万
 
 // ============================================================
 // ① 读取 .mcworld
@@ -307,19 +361,13 @@ document.getElementById('btnWriteWorld').addEventListener('click', function () {
         const cx = 0, cz = 0, subY = -4;
         const layer0Blocks = [];
 
-        // 石头平台
         for (let lx = 0; lx < 16; lx++) {
             for (let lz = 0; lz < 16; lz++) {
-                layer0Blocks.push({
-                    x: lx, y: 0, z: lz,
-                    name: 'minecraft:stone',
-                    states: {}
-                });
+                layer0Blocks.push({ x: lx, y: 0, z: lz, name: 'minecraft:stone', states: {} });
             }
         }
         log('放置石头: ' + layer0Blocks.length + ' 个');
 
-        // 命令方块：红石控制，朝下
         layer0Blocks.push({
             x: 8, y: 1, z: 8,
             name: 'minecraft:command_block',
@@ -330,7 +378,6 @@ document.getElementById('btnWriteWorld').addEventListener('click', function () {
         });
         log('放置命令方块 @ (8, 1, 8) - 红石控制');
 
-        // 石头按钮：命令方块上方
         layer0Blocks.push({
             x: 8, y: 2, z: 8,
             name: 'minecraft:stone_button',
@@ -345,33 +392,11 @@ document.getElementById('btnWriteWorld').addEventListener('click', function () {
         const subChunkBytes = u.serializeSubChunk(subY, [layer0Blocks]);
         log('SubChunk: ' + subChunkBytes.length + ' 字节');
 
-        // 命令方块 BE（世界坐标）
         const worldX = 8, worldY = -63, worldZ = 8;
-        const beEntries = [
-            { name: 'id', type: 8, value: 'CommandBlock' },
-            { name: 'x', type: 3, value: worldX },
-            { name: 'y', type: 3, value: worldY },
-            { name: 'z', type: 3, value: worldZ },
-            { name: 'isMovable', type: 1, value: 1 },
-            { name: 'Command', type: 8, value: 'say hello' },
-            { name: 'CustomName', type: 8, value: '' },
-            { name: 'ExecuteOnFirstTick', type: 1, value: 0 },
-            { name: 'LastExecution', type: 4, value: 0 },
-            { name: 'LPCommandMode', type: 3, value: 0 },
-            { name: 'LPCondionalMode', type: 1, value: 0 },
-            { name: 'LPRedstoneMode', type: 1, value: 0 },
-            { name: 'SuccessCount', type: 3, value: 0 },
-            { name: 'TickDelay', type: 3, value: 0 },
-            { name: 'TrackOutput', type: 1, value: 1 },
-            { name: 'Version', type: 3, value: 19 },
-            { name: 'auto', type: 1, value: 0 },
-            { name: 'conditionMet', type: 1, value: 0 },
-            { name: 'powered', type: 1, value: 0 }
-        ];
+        const beEntries = makeCommandBlockBEEntries(worldX, worldY, worldZ);
         const beBytes = u.bSerializeBE(beEntries);
 
         const entries = [];
-
         function makeKey(cx, cz, tag, subY) {
             const len = subY !== undefined ? 10 : 9;
             const k = new Uint8Array(len);
@@ -432,9 +457,8 @@ document.getElementById('btnWriteWorld').addEventListener('click', function () {
         log('✅ 生成完成，已触发下载', 'log-ok');
         log('测试方法：把 test.mcworld 放到 minecraftWorlds/ 目录，打开世界后', 'log-warn');
         log('  1. 在 (8, -63, 8) 找到命令方块', 'log-warn');
-        log('  2. 点开应该显示指令 `say hello`，模式为"红石控制"', 'log-warn');
+        log('  2. 点开应该显示指令 `say hello`', 'log-warn');
         log('  3. 命令方块上方 (8, -62, 8) 应该有石头按钮', 'log-warn');
-        log('  4. 按下按钮 → 命令方块执行一次', 'log-warn');
     } catch (err) {
         log('❌ ' + err.message, 'log-error');
         console.error(err);
@@ -520,16 +544,24 @@ btnReadStruct.addEventListener('click', async function () {
                     break;
                 }
                 shown++;
+
+                const structIdx = parseInt(key, 10);
+                let coordStr = '';
+                if (!isNaN(structIdx)) {
+                    const sx = Math.floor(structIdx / (sizeY * sizeZ));
+                    const rem = structIdx % (sizeY * sizeZ);
+                    const sy = Math.floor(rem / sizeZ);
+                    const sz = rem % sizeZ;
+                    coordStr = ' → (' + sx + ',' + sy + ',' + sz + ')';
+                }
+
                 const beData = bpd.value[key].value.block_entity_data.value;
                 const id = beData.id ? beData.id.value : '(无)';
-                log('  "' + key + '" → ' + id);
+                log('  "' + key + '"' + coordStr + ' → ' + id);
 
                 if (id === 'CommandBlock') {
                     const cmd = beData.Command ? beData.Command.value : '(空)';
                     log('      指令: ' + cmd, cmd === '(空)' ? 'log-error' : 'log-ok');
-                    if (beData.auto) {
-                        log('      模式: ' + (beData.auto.value === 1 ? '自动' : '红石控制'), 'log-dim');
-                    }
                 }
                 if (id === 'Sign' && beData.FrontText) {
                     log('      正面: ' + beData.FrontText.value.Text.value, 'log-ok');
@@ -559,13 +591,12 @@ document.getElementById('btnWriteStruct').addEventListener('click', function () 
         const sizeX = 16, sizeY = 4, sizeZ = 16;
         const totalBlocks = sizeX * sizeY * sizeZ;
 
-        // 调色板：air / stone / command_block / stone_button
         const palette = [
             { name: 'minecraft:air', states: {} },
             { name: 'minecraft:stone', states: {} },
             { name: 'minecraft:command_block', states: {
                 conditional_bit: { type: 'Byte', value: 0 },
-                facing_direction: { type: 'Int', value: 0 }        // ★ 0 = 朝下
+                facing_direction: { type: 'Int', value: 0 }
             }},
             { name: 'minecraft:stone_button', states: {
                 facing_direction: { type: 'Int', value: 1 },
@@ -576,28 +607,21 @@ document.getElementById('btnWriteStruct').addEventListener('click', function () 
 
         const indices0 = new Int32Array(totalBlocks).fill(-1);
 
-        // 石头平台
         for (let x = 0; x < 16; x++) {
             for (let z = 0; z < 16; z++) {
-                const idx = (x * sizeY + 0) * sizeZ + z;
-                indices0[idx] = 1;
+                indices0[(x * sizeY + 0) * sizeZ + z] = 1;
             }
         }
         log('放置石头: 256 个');
 
-        // 命令方块 @ (8, 1, 8)
-        const cmdIdx = (8 * sizeY + 1) * sizeZ + 8;
-        indices0[cmdIdx] = 2;
+        indices0[(8 * sizeY + 1) * sizeZ + 8] = 2;
         log('放置命令方块 @ (8, 1, 8) - 红石控制');
 
-        // 石头按钮 @ (8, 2, 8)
-        const btnIdx = (8 * sizeY + 2) * sizeZ + 8;
-        indices0[btnIdx] = 3;
+        indices0[(8 * sizeY + 2) * sizeZ + 8] = 3;
         log('放置石头按钮 @ (8, 2, 8)');
 
         const indices1 = new Int32Array(totalBlocks).fill(-1);
 
-        // 调色板 NBT
         const paletteEntries = palette.map(function (p) {
             const stateEntries = Object.keys(p.states).map(function (k) {
                 const tag = p.states[k];
@@ -610,17 +634,13 @@ document.getElementById('btnWriteStruct').addEventListener('click', function () 
             ];
         });
 
-        // 命令方块 BE（结构相对坐标）
-        const be = makeCommandBlockBE(8, 1, 8);
-
-        // ★★★ 关键改动：block_position_data 的键用扁平索引（字符串形式） ★★★
-        // 索引公式：(sx * sizeY + sy) * sizeZ + sz
-        const cmdBlockIndex = (8 * sizeY + 1) * sizeZ + 8;
-        log('命令方块扁平索引: ' + cmdBlockIndex);
+        const be = makeCommandBlockBEEntries(8, 1, 8);
+        const structIdx = (8 * sizeY + 1) * sizeZ + 8;
+        log('命令方块扁平索引: ' + structIdx);
 
         const bpEntries = [
             {
-                name: String(cmdBlockIndex),   // ★ 字符串形式的扁平索引
+                name: String(structIdx),
                 type: 10,
                 value: [
                     { name: 'block_entity_data', type: 10, value: be }
@@ -666,9 +686,6 @@ document.getElementById('btnWriteStruct').addEventListener('click', function () 
                 } else {
                     log('      ⚠️ Command 字段丢失！', 'log-error');
                 }
-                if (beCheck.auto) {
-                    log('      auto: ' + beCheck.auto.value + (beCheck.auto.value === 0 ? ' (红石控制)' : ' (自动)'), 'log-dim');
-                }
             }
         } else {
             log('⚠️ block_position_data 为空或不存在', 'log-error');
@@ -680,7 +697,624 @@ document.getElementById('btnWriteStruct').addEventListener('click', function () 
         log('✅ 生成完成，已触发下载', 'log-ok');
         log('测试方法：把 test.mcstructure 放到 behavior_packs/你的包/structures/ 目录，', 'log-warn');
         log('  游戏里 /structure load test ~ ~ ~ 加载，', 'log-warn');
-        log('  点开命令方块应该看到指令 `say hello`，模式为"红石控制"。', 'log-warn');
+        log('  点开命令方块应该看到指令 `say hello`。', 'log-warn');
+    } catch (err) {
+        log('❌ ' + err.message, 'log-error');
+        console.error(err);
+    }
+});
+
+// ============================================================
+// ⑤ 转换：mcworld → mcstructure
+// ============================================================
+const fileConvertW2S = document.getElementById('fileConvertW2S');
+const btnConvertW2S = document.getElementById('btnConvertW2S');
+
+fileConvertW2S.addEventListener('change', function () {
+    btnConvertW2S.disabled = !this.files[0];
+});
+
+btnConvertW2S.addEventListener('click', async function () {
+    const file = fileConvertW2S.files[0];
+    if (!file) return;
+    const ignoreGround = document.getElementById('ignoreGroundW2S').checked;
+
+    clearLog();
+    log('[mcworld → mcstructure] ' + file.name, 'log-info');
+    log('文件大小: ' + (file.size / 1024).toFixed(1) + ' KB');
+    log('忽略地面: ' + (ignoreGround ? '是' : '否'));
+    hr();
+
+    try {
+        const u = window.McCodec;
+        const zip = await JSZip.loadAsync(file);
+
+        // Step 1: 收集所有 SSTable 条目
+        const ldbFiles = [];
+        zip.forEach(function (path) {
+            if (path.startsWith('db/') && (path.endsWith('.ldb') || path.endsWith('.log'))) {
+                ldbFiles.push(path);
+            }
+        });
+        log('db 文件: ' + ldbFiles.length + ' 个');
+
+        const allEntries = [];
+        for (const path of ldbFiles) {
+            const bytes = await zip.file(path).async('uint8array');
+            const r = u.parseSSTable(bytes);
+            for (const e of r.entries) allEntries.push(e);
+            await yieldToUI();
+        }
+        log('解析出 key-value: ' + allEntries.length.toLocaleString());
+        hr();
+
+        // Step 2: 分类
+        const subChunkMap = new Map();
+        const beBufList = [];
+        for (const e of allEntries) {
+            if (e.key.length === 10 && e.key[8] === 0x2f) {
+                const view = new DataView(e.key.buffer, e.key.byteOffset, e.key.byteLength);
+                const cx = view.getInt32(0, true);
+                const cz = view.getInt32(4, true);
+                const subY = new Int8Array([e.key[9]])[0];
+                subChunkMap.set(cx + ',' + cz + ',' + subY, { cx, cz, subY, value: e.value });
+            } else if (e.key.length === 9 && e.key[8] === 0x31) {
+                beBufList.push(e.value);
+            }
+        }
+        log('子区块数: ' + subChunkMap.size.toLocaleString());
+        log('BE 条目数: ' + beBufList.length.toLocaleString());
+        hr();
+
+        // Step 3: 扫描范围
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        let scannedSubChunks = 0, nonEmptySubChunks = 0;
+
+        const entriesArr = Array.from(subChunkMap.values());
+        for (const sc of entriesArr) {
+            scannedSubChunks++;
+            const sub = u.parseSubChunk(sc.value);
+            if (!sub) continue;
+
+            if (ignoreGround) {
+                let allGround = true;
+                for (const layer of sub.layers) {
+                    for (const p of layer.palette) {
+                        if (!GROUND_BLOCKS.has(p.name)) { allGround = false; break; }
+                    }
+                    if (!allGround) break;
+                }
+                if (allGround) continue;
+            }
+            nonEmptySubChunks++;
+
+            for (let li = 0; li < sub.layers.length; li++) {
+                const layer = sub.layers[li];
+                if (!layer.palette || layer.palette.length === 0) continue;
+
+                if (layer.bits === 0) {
+                    const palEntry = layer.palette[0];
+                    if (!palEntry) continue;
+                    if (ignoreGround && GROUND_BLOCKS.has(palEntry.name)) continue;
+                    const wx0 = sc.cx * 16, wy0 = sc.subY * 16, wz0 = sc.cz * 16;
+                    if (wx0 < minX) minX = wx0;
+                    if (wx0 + 15 > maxX) maxX = wx0 + 15;
+                    if (wy0 < minY) minY = wy0;
+                    if (wy0 + 15 > maxY) maxY = wy0 + 15;
+                    if (wz0 < minZ) minZ = wz0;
+                    if (wz0 + 15 > maxZ) maxZ = wz0 + 15;
+                } else {
+                    for (let lx = 0; lx < 16; lx++) for (let ly = 0; ly < 16; ly++) for (let lz = 0; lz < 16; lz++) {
+                        const palIdx = u.getBitValue(layer.indexBytes, lx * 256 + lz * 16 + ly, layer.bits);
+                        if (palIdx < 0 || palIdx >= layer.palette.length) continue;
+                        const palEntry = layer.palette[palIdx];
+                        if (ignoreGround && GROUND_BLOCKS.has(palEntry.name)) continue;
+                        const wx = sc.cx * 16 + lx;
+                        const wy = sc.subY * 16 + ly;
+                        const wz = sc.cz * 16 + lz;
+                        if (wx < minX) minX = wx;
+                        if (wx > maxX) maxX = wx;
+                        if (wy < minY) minY = wy;
+                        if (wy > maxY) maxY = wy;
+                        if (wz < minZ) minZ = wz;
+                        if (wz > maxZ) maxZ = wz;
+                    }
+                }
+            }
+
+            if (scannedSubChunks % 50 === 0) {
+                log('  扫描 ' + scannedSubChunks + '/' + entriesArr.length +
+                    ' (有内容 ' + nonEmptySubChunks + ')', 'log-dim');
+                await yieldToUI();
+            }
+        }
+
+        if (minX === Infinity) {
+            log('❌ 未找到任何非地面内容', 'log-error');
+            return;
+        }
+
+        const x1 = minX, x2 = maxX, y1 = minY, y2 = maxY, z1 = minZ, z2 = maxZ;
+        const sizeX = x2 - x1 + 1, sizeY = y2 - y1 + 1, sizeZ = z2 - z1 + 1;
+        const totalBlocks = sizeX * sizeY * sizeZ;
+
+        log('扫描子区块: ' + scannedSubChunks.toLocaleString() + ', 有内容: ' + nonEmptySubChunks.toLocaleString());
+        log('自动检测范围: X ' + x1 + ' ~ ' + x2 + ', Y ' + y1 + ' ~ ' + y2 + ', Z ' + z1 + ' ~ ' + z2);
+        log('结构尺寸: ' + sizeX + ' × ' + sizeY + ' × ' + sizeZ + ' = ' + totalBlocks.toLocaleString() + ' 个方块');
+        hr();
+
+        // 内存阈值检查
+        if (totalBlocks > MAX_TOTAL_BLOCKS) {
+            log('⚠️ 结构总方块数超过安全上限！', 'log-warn');
+            log('   当前: ' + totalBlocks.toLocaleString(), 'log-warn');
+            log('   上限: ' + MAX_TOTAL_BLOCKS.toLocaleString(), 'log-warn');
+            log('   继续可能导致浏览器卡死。', 'log-warn');
+            const ok = confirm(
+                '结构总方块数 ' + totalBlocks.toLocaleString() + ' 超过安全上限 ' +
+                MAX_TOTAL_BLOCKS.toLocaleString() + '。\n\n' +
+                '继续可能导致浏览器卡死或崩溃。是否继续？'
+            );
+            if (!ok) {
+                log('已取消转换。', 'log-warn');
+                return;
+            }
+            log('用户确认，继续...', 'log-warn');
+        }
+
+        // Step 4: 收集方块（两层）
+        const blocksMap0 = new Map();
+        const blocksMap1 = new Map();
+        const palette = [];
+        const paletteMap = new Map();
+
+        function addPal(name, states, version) {
+            const stateKeys = Object.keys(states || {}).sort()
+                .map(k => k + '=' + states[k].type + ':' + states[k].value)
+                .join(',');
+            const key = name + '|' + stateKeys;
+            if (paletteMap.has(key)) return paletteMap.get(key);
+            palette.push({ name, states: states || {}, version: version || 18168865 });
+            const idx = palette.length - 1;
+            paletteMap.set(key, idx);
+            return idx;
+        }
+        addPal('minecraft:air', {});
+
+        let collected = 0;
+        for (const sc of entriesArr) {
+            const sub = u.parseSubChunk(sc.value);
+            if (!sub) continue;
+
+            for (let li = 0; li < sub.layers.length; li++) {
+                if (li >= 2) break;
+                const layer = sub.layers[li];
+                if (!layer.palette || layer.palette.length === 0) continue;
+                const targetMap = (li === 0) ? blocksMap0 : blocksMap1;
+
+                if (layer.bits === 0) {
+                    const palEntry = layer.palette[0];
+                    if (!palEntry || palEntry.name === 'minecraft:air') continue;
+                    const finalIdx = addPal(palEntry.name, palEntry.states, palEntry.version);
+                    for (let lx = 0; lx < 16; lx++) for (let ly = 0; ly < 16; ly++) for (let lz = 0; lz < 16; lz++) {
+                        const wx = sc.cx * 16 + lx, wy = sc.subY * 16 + ly, wz = sc.cz * 16 + lz;
+                        if (wx < x1 || wx > x2 || wy < y1 || wy > y2 || wz < z1 || wz > z2) continue;
+                        const sx = wx - x1, sy = wy - y1, sz = wz - z1;
+                        const structIdx = (sx * sizeY + sy) * sizeZ + sz;
+                        targetMap.set(structIdx, finalIdx);
+                        collected++;
+                    }
+                } else {
+                    for (let lx = 0; lx < 16; lx++) for (let ly = 0; ly < 16; ly++) for (let lz = 0; lz < 16; lz++) {
+                        const palIdx = u.getBitValue(layer.indexBytes, lx * 256 + lz * 16 + ly, layer.bits);
+                        if (palIdx < 0 || palIdx >= layer.palette.length) continue;
+                        const palEntry = layer.palette[palIdx];
+                        if (palEntry.name === 'minecraft:air') continue;
+                        const wx = sc.cx * 16 + lx, wy = sc.subY * 16 + ly, wz = sc.cz * 16 + lz;
+                        if (wx < x1 || wx > x2 || wy < y1 || wy > y2 || wz < z1 || wz > z2) continue;
+                        const finalIdx = addPal(palEntry.name, palEntry.states, palEntry.version);
+                        const sx = wx - x1, sy = wy - y1, sz = wz - z1;
+                        const structIdx = (sx * sizeY + sy) * sizeZ + sz;
+                        targetMap.set(structIdx, finalIdx);
+                        collected++;
+                    }
+                }
+            }
+        }
+        log('已放置方块: L0 ' + blocksMap0.size.toLocaleString() + ' / L1 ' + blocksMap1.size.toLocaleString() +
+            ' / 总处理 ' + collected.toLocaleString());
+        log('调色板: ' + palette.length + ' 项');
+        hr();
+
+        // Step 5: 收集 BE
+        const blockPositionData = {};
+        let beTotal = 0, beKept = 0, beFail = 0;
+
+        for (const beBuf of beBufList) {
+            let p = 0;
+            while (p < beBuf.length) {
+                try {
+                    const nbt = u.parseNbt(beBuf, p);
+                    if (nbt.bytesRead <= 0) break;
+                    p += nbt.bytesRead;
+                    beTotal++;
+
+                    const be = nbt.value;
+                    if (!be || !be.x || !be.y || !be.z) { beFail++; continue; }
+
+                    const bx = Number(be.x.value);
+                    const by = Number(be.y.value);
+                    const bz = Number(be.z.value);
+                    if (!isFinite(bx) || !isFinite(by) || !isFinite(bz)) { beFail++; continue; }
+                    if (bx < x1 || bx > x2 || by < y1 || by > y2 || bz < z1 || bz > z2) { beFail++; continue; }
+
+                    const sx = bx - x1, sy = by - y1, sz = bz - z1;
+                    const structIdx = (sx * sizeY + sy) * sizeZ + sz;
+
+                    const entryList = u.parsedToWriterEntries(be);
+                    for (const ent of entryList) {
+                        if (ent.name === 'x' && ent.type === 3) ent.value = sx;
+                        else if (ent.name === 'y' && ent.type === 3) ent.value = sy;
+                        else if (ent.name === 'z' && ent.type === 3) ent.value = sz;
+                    }
+
+                    // ★ 键是扁平索引字符串
+                    blockPositionData[String(structIdx)] = entryList;
+                    beKept++;
+                } catch (e) { beFail++; break; }
+            }
+        }
+        log('方块实体: 读到 ' + beTotal.toLocaleString() +
+            ', 保留 ' + beKept.toLocaleString() +
+            ', 范围外/异常 ' + beFail.toLocaleString());
+        hr();
+
+        // Step 6: 展开 + 构造
+        log('展开索引数组...', 'log-dim');
+        await yieldToUI();
+
+        const indices0 = new Int32Array(totalBlocks).fill(-1);
+        for (const kv of blocksMap0) indices0[kv[0]] = kv[1];
+
+        const indices1 = new Int32Array(totalBlocks).fill(-1);
+        for (const kv of blocksMap1) indices1[kv[0]] = kv[1];
+
+        const paletteEntries = palette.map(function (p) {
+            const stateEntries = Object.keys(p.states).map(function (k) {
+                const tag = p.states[k];
+                return { name: k, type: u.NBT_TYPE_IDS[tag.type] || 3, value: tag.value };
+            });
+            return [
+                { name: 'name', type: 8, value: p.name },
+                { name: 'states', type: 10, value: stateEntries },
+                { name: 'version', type: 3, value: p.version }
+            ];
+        });
+
+        const bpEntries = Object.keys(blockPositionData).map(function (key) {
+            return {
+                name: key,
+                type: 10,
+                value: [
+                    { name: 'block_entity_data', type: 10, value: blockPositionData[key] }
+                ]
+            };
+        });
+
+        const root = [
+            { name: 'format_version', type: 3, value: 1 },
+            { name: 'size', type: 9, value: { itemType: 3, items: [sizeX, sizeY, sizeZ] } },
+            { name: 'structure', type: 10, value: [
+                { name: 'block_indices', type: 9, value: { itemType: 9, items: [
+                    { itemType: 3, items: Array.from(indices0) },
+                    { itemType: 3, items: Array.from(indices1) }
+                ]}},
+                { name: 'entities', type: 9, value: { itemType: 10, items: [] } },
+                { name: 'palette', type: 10, value: [
+                    { name: 'default', type: 10, value: [
+                        { name: 'block_palette', type: 9, value: { itemType: 10, items: paletteEntries } },
+                        { name: 'block_position_data', type: 10, value: bpEntries }
+                    ]}
+                ]}
+            ]},
+            { name: 'structure_world_origin', type: 9, value: { itemType: 3, items: [x1, y1, z1] } }
+        ];
+
+        log('NBT 序列化...', 'log-dim');
+        await yieldToUI();
+        const nbtBytes = u.bSerializeBE(root);
+        log('NBT: ' + nbtBytes.length.toLocaleString() + ' 字节');
+
+        const outName = (file.name.replace(/\.(mcworld|zip)$/i, '') || 'structure') + '.mcstructure';
+        download(nbtBytes, outName);
+
+        hr();
+        log('✅ 转换完成: ' + outName, 'log-ok');
+        log('结构信息: ' + sizeX + '×' + sizeY + '×' + sizeZ +
+            ', 调色板 ' + palette.length + ' 项, BE ' + beKept + ' 个', 'log-ok');
+    } catch (err) {
+        log('❌ ' + err.message, 'log-error');
+        console.error(err);
+    }
+});
+
+// ============================================================
+// ⑥ 转换：mcstructure → mcworld
+// ============================================================
+const fileConvertS2W = document.getElementById('fileConvertS2W');
+const btnConvertS2W = document.getElementById('btnConvertS2W');
+
+fileConvertS2W.addEventListener('change', function () {
+    btnConvertS2W.disabled = !this.files[0];
+});
+
+btnConvertS2W.addEventListener('click', async function () {
+    const file = fileConvertS2W.files[0];
+    if (!file) return;
+
+    const worldName = document.getElementById('s2wWorldName').value || 'Structure World';
+    const px = parseInt(document.getElementById('s2wX').value) || 0;
+    const py = parseInt(document.getElementById('s2wY').value) || -60;
+    const pz = parseInt(document.getElementById('s2wZ').value) || 0;
+
+    clearLog();
+    log('[mcstructure → mcworld] ' + file.name, 'log-info');
+    log('文件大小: ' + (file.size / 1024).toFixed(1) + ' KB');
+    log('世界名称: ' + worldName);
+    log('放置原点: (' + px + ', ' + py + ', ' + pz + ')');
+    hr();
+
+    try {
+        const u = window.McCodec;
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+
+        // Step 1: 解析
+        const nbt = u.parseNbt(bytes, 0);
+        const root = nbt.value;
+
+        const sizeX = root.size.value.items[0];
+        const sizeY = root.size.value.items[1];
+        const sizeZ = root.size.value.items[2];
+        log('结构尺寸: ' + sizeX + ' × ' + sizeY + ' × ' + sizeZ);
+
+        const structure = root.structure.value;
+        const palette = structure.palette.value.default.value.block_palette.value.items;
+        log('调色板: ' + palette.length + ' 项');
+
+        const biItems = structure.block_indices.value.items;
+        const blockIndices0 = biItems[0].items || biItems[0];
+        let blockIndices1 = null;
+        if (biItems.length > 1) {
+            const arr = biItems[1].items || biItems[1];
+            let hasAny = false;
+            for (let i = 0; i < arr.length; i++) {
+                if (arr[i] >= 0) { hasAny = true; break; }
+            }
+            if (hasAny) blockIndices1 = arr;
+        }
+        log('Layer 1: ' + (blockIndices1 ? '有内容' : '全空'));
+        hr();
+
+        // Step 2: 遍历方块，按 chunk 分组
+        const chunkGroups = new Map();
+        function getOrCreate(cx, cz) {
+            const key = cx + ',' + cz;
+            if (!chunkGroups.has(key)) {
+                chunkGroups.set(key, { cx, cz, subChunks: new Map(), blockEntities: [] });
+            }
+            return chunkGroups.get(key);
+        }
+
+        function addBlockAt(structIdx, palIdx, layerIdx) {
+            const palEntry = palette[palIdx];
+            const blockName = palEntry.name.value;
+            if (blockName === 'minecraft:air' || blockName === 'minecraft:structure_void') return;
+
+            const sx = Math.floor(structIdx / (sizeY * sizeZ));
+            const rem = structIdx % (sizeY * sizeZ);
+            const sy = Math.floor(rem / sizeZ);
+            const sz = rem % sizeZ;
+
+            const worldX = px + sx, worldY = py + sy, worldZ = pz + sz;
+            const cx = Math.floor(worldX / 16);
+            const cz = Math.floor(worldZ / 16);
+            const subY = Math.floor(worldY / 16);
+
+            const group = getOrCreate(cx, cz);
+            if (!group.subChunks.has(subY)) {
+                group.subChunks.set(subY, [[], []]);
+            }
+            const subLayers = group.subChunks.get(subY);
+            subLayers[layerIdx].push({
+                x: worldX - cx * 16,
+                y: worldY - subY * 16,
+                z: worldZ - cz * 16,
+                name: blockName,
+                states: palEntry.states.value
+            });
+        }
+
+        const totalStructureBlocks = sizeX * sizeY * sizeZ;
+        let placedCount = 0;
+        for (let structIdx = 0; structIdx < totalStructureBlocks; structIdx++) {
+            const palIdx0 = blockIndices0[structIdx];
+            if (palIdx0 >= 0) { addBlockAt(structIdx, palIdx0, 0); placedCount++; }
+            if (blockIndices1) {
+                const palIdx1 = blockIndices1[structIdx];
+                if (palIdx1 >= 0) { addBlockAt(structIdx, palIdx1, 1); placedCount++; }
+            }
+            if (structIdx > 0 && structIdx % 100000 === 0) {
+                log('  遍历 ' + structIdx.toLocaleString() + '/' + totalStructureBlocks.toLocaleString(), 'log-dim');
+                await yieldToUI();
+            }
+        }
+        log('遍历方块: ' + placedCount.toLocaleString() + ' 个');
+        log('chunk 分组: ' + chunkGroups.size + ' 个');
+        hr();
+
+        // Step 3: 处理 BE
+        let beKept = 0;
+        const defaultCompound = structure.palette.value.default.value;
+        if (defaultCompound.block_position_data && defaultCompound.block_position_data.value) {
+            const bpd = defaultCompound.block_position_data.value;
+            const beKeys = Object.keys(bpd);
+            log('处理方块实体: ' + beKeys.length + ' 个');
+
+            for (const key of beKeys) {
+                const beData = bpd[key].value;
+                if (!beData.block_entity_data || !beData.block_entity_data.value) continue;
+                const be = beData.block_entity_data.value;
+
+                // 从键（扁平索引）反推坐标
+                let sx = null, sy = null, sz = null;
+                const structIdx = parseInt(key, 10);
+                if (!isNaN(structIdx)) {
+                    sx = Math.floor(structIdx / (sizeY * sizeZ));
+                    const rem = structIdx % (sizeY * sizeZ);
+                    sy = Math.floor(rem / sizeZ);
+                    sz = rem % sizeZ;
+                } else if (be.x && be.y && be.z) {
+                    sx = Number(be.x.value);
+                    sy = Number(be.y.value);
+                    sz = Number(be.z.value);
+                }
+                if (sx === null) continue;
+
+                // 补全 id
+                if (!be.id) {
+                    const idx2 = (sx * sizeY + sy) * sizeZ + sz;
+                    const palIdx = blockIndices0[idx2];
+                    if (palIdx >= 0) {
+                        const bn = palette[palIdx].name.value;
+                        const inferred = u.BLOCK_TO_BE_ID[bn];
+                        if (inferred) be.id = { type: 'String', value: inferred };
+                    }
+                }
+
+                // 结构相对坐标 → 世界坐标
+                const worldX = px + sx, worldY = py + sy, worldZ = pz + sz;
+
+                const beEntries = u.parsedToWriterEntries(be);
+                for (const e of beEntries) {
+                    if (e.name === 'x' && e.type === 3) e.value = worldX;
+                    if (e.name === 'y' && e.type === 3) e.value = worldY;
+                    if (e.name === 'z' && e.type === 3) e.value = worldZ;
+                }
+
+                const cx = Math.floor(worldX / 16);
+                const cz = Math.floor(worldZ / 16);
+                const group = getOrCreate(cx, cz);
+                group.blockEntities.push(u.bSerializeBE(beEntries));
+                beKept++;
+            }
+        }
+        log('方块实体保留: ' + beKept);
+        hr();
+
+        // Step 4: 构建 db 条目
+        log('构建 LevelDB 条目...', 'log-dim');
+        await yieldToUI();
+
+        const entries = [];
+        const v2b = new Uint8Array(540);
+        for (let i = 0; i < 270; i++) v2b[i * 2] = 0x04;
+        const tag2c = new Uint8Array([0x2a]);
+        const tag36 = new Uint8Array([2, 0, 0, 0]);
+        const tag3f = new Uint8Array([0xb5, 0x60, 0x75, 0xfd, 0x69, 0x2a, 0x3c, 0x93]);
+        const tag40 = new Uint8Array([0x00, 0x0a]);
+        const tag41 = new Uint8Array([0x00]);
+        const tag77 = new Uint8Array(0);
+
+        function makeKey(cx, cz, tag, subY) {
+            const len = subY !== undefined ? 10 : 9;
+            const k = new Uint8Array(len);
+            const dv = new DataView(k.buffer);
+            dv.setInt32(0, cx, true);
+            dv.setInt32(4, cz, true);
+            k[8] = tag;
+            if (subY !== undefined) k[9] = subY & 0xFF;
+            return k;
+        }
+
+        let subChunkCount = 0;
+        for (const group of chunkGroups.values()) {
+            for (const [subY, subLayers] of group.subChunks) {
+                const l0 = subLayers[0] || [];
+                const l1 = subLayers[1] || [];
+                if (l0.length === 0 && l1.length === 0) continue;
+                const writeLayers = (l1.length > 0) ? [l0, l1] : [l0];
+                const scBytes = u.serializeSubChunk(subY, writeLayers);
+                entries.push({
+                    key: makeKey(group.cx, group.cz, 0x2f, subY & 0xFF),
+                    value: scBytes
+                });
+                subChunkCount++;
+            }
+
+            let totalBe = 0;
+            for (const be of group.blockEntities) totalBe += be.length;
+            const combinedBe = new Uint8Array(totalBe);
+            let off = 0;
+            for (const be of group.blockEntities) {
+                combinedBe.set(be, off);
+                off += be.length;
+            }
+            entries.push({ key: makeKey(group.cx, group.cz, 0x31), value: combinedBe });
+
+            entries.push({ key: makeKey(group.cx, group.cz, 0x2b), value: v2b });
+            entries.push({ key: makeKey(group.cx, group.cz, 0x2c), value: tag2c });
+            entries.push({ key: makeKey(group.cx, group.cz, 0x36), value: tag36 });
+            entries.push({ key: makeKey(group.cx, group.cz, 0x3f), value: tag3f });
+            entries.push({ key: makeKey(group.cx, group.cz, 0x40), value: tag40 });
+            entries.push({ key: makeKey(group.cx, group.cz, 0x41), value: tag41 });
+            entries.push({ key: makeKey(group.cx, group.cz, 0x77), value: tag77 });
+        }
+        log('SubChunk 条目: ' + subChunkCount);
+        log('总 db 条目: ' + entries.length);
+        hr();
+
+        // Step 5: SSTable + MANIFEST + ZIP
+        log('构建 SSTable...', 'log-dim');
+        await yieldToUI();
+        const ldbBytes = u.buildSSTable(entries);
+        log('SSTable: ' + ldbBytes.length.toLocaleString() + ' 字节');
+
+        const sortedKeys = entries.map(e => e.key).sort(function (a, b) {
+            const n = Math.min(a.length, b.length);
+            for (let i = 0; i < n; i++) {
+                if (a[i] !== b[i]) return a[i] - b[i];
+            }
+            return a.length - b.length;
+        });
+        const manifestRaw = u.buildManifestBytes(0, 5, ldbBytes.length, sortedKeys[0], sortedKeys[sortedKeys.length - 1]);
+        const manifestBytes = u.buildLogRecord(new Uint8Array(manifestRaw), 1);
+        log('MANIFEST: ' + manifestBytes.length + ' 字节');
+
+        const levelDat = u.buildLevelDat(worldName, px, py, pz);
+        log('level.dat: ' + levelDat.length + ' 字节');
+
+        const zip = new u.ZipBuilder();
+        zip.addFile('level.dat', levelDat);
+        zip.addFile('db/000005.ldb', ldbBytes);
+        zip.addFile('db/CURRENT', new TextEncoder().encode('MANIFEST-000004\n'));
+        zip.addFile('db/MANIFEST-000004', manifestBytes);
+        zip.addFile('levelname.txt', new TextEncoder().encode(worldName));
+        zip.addFile('world_behavior_packs.json', new TextEncoder().encode('[]'));
+        zip.addFile('world_resource_packs.json', new TextEncoder().encode('[]'));
+
+        const zipBytes = zip.build();
+        log('ZIP: ' + zipBytes.length.toLocaleString() + ' 字节');
+
+        const outName = worldName.replace(/[\\/:*?"<>|]/g, '_') + '.mcworld';
+        download(zipBytes, outName);
+
+        hr();
+        log('✅ 转换完成: ' + outName, 'log-ok');
+        log('世界: ' + worldName, 'log-ok');
+        log('放置原点: (' + px + ', ' + py + ', ' + pz + ')', 'log-ok');
+        log('chunk 数: ' + chunkGroups.size + ', SubChunk 数: ' + subChunkCount + ', BE 数: ' + beKept, 'log-ok');
     } catch (err) {
         log('❌ ' + err.message, 'log-error');
         console.error(err);
@@ -702,6 +1336,7 @@ document.getElementById('btnWriteStruct').addEventListener('click', function () 
     log('   导出函数: ' + Object.keys(window.McCodec).length + ' 个');
     hr();
     log('选择文件或点击按钮开始。');
+    log('提示：⑤ 和 ⑥ 是转换器，带蓝色边框。', 'log-accent');
 })();
 </script>
 
