@@ -385,4 +385,4 @@ block_position_data:
 
 ## 9. License
 
-CC BY 4.0
+MIT
