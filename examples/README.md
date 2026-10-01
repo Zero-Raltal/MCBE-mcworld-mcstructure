@@ -54,8 +54,29 @@ node write-mcstructure.js test.mcstructure
 
 **⚠️ 最容易踩的坑**：mcstructure 的 `block_position_data` 键必须是 `"sx,sy,sz"` 字符串（相对坐标），不是扁平索引。写错会导致**所有**方块实体数据静默丢失（命令方块变空、告示牌变空白、箱子物品消失）。
 
-详见 [`docs/07-blockentity.md`](./docs/07-blockentity.md) §3。
+详见 [`docs/07-blockentity.md`](./docs/07-blockentity.md) §3
+
+## 浏览器 Demo
+
+不想装 Node.js？直接打开 `docs/demo.html`：
+
+```bash
+# 在项目根目录启动静态服务器
+python3 -m http.server 8000
+# 浏览器打开
+open http://localhost:8000/docs/demo.html
+```
+
+Demo 页面提供 4 个操作：
+
+1. **读取 .mcworld**：选择文件 → 输出方块统计 + 所有 BE
+2. **生成 .mcworld**：一键生成测试世界并下载
+3. **读取 .mcstructure**：选择文件 → 输出结构信息 + BE
+4. **生成 .mcstructure**：一键生成测试结构并下载
+
+> ⚠️ **必须用 HTTP 服务器**打开，不能用 `file://`（浏览器会拦截跨目录的 `<script src>`）。
+> `docs/demo.html` 通过 `<script src="../examples/utils.js">` 加载工具库，所以 `examples/utils.js` **必须是 UMD 格式**（顶部和底部有 `(function (root, factory) {...})` 包裹）。
 
 ## License
 
-CC BY 4.0
+MII
