@@ -2,7 +2,7 @@
 name: minecraft-bedrock-codec
 description: Minecraft 基岩版 .mcworld 与 .mcstructure 两种格式的完整读写逻辑、二进制结构、双向转换算法。适用于解析、生成、修复、转换这两种文件。
 version: 3.1
-target-version: Minecraft Bedrock 1.19.10 - 1.21
+target-version: Minecraft Bedrock 1.19.10+
 triggers:
   - "mcworld"
   - "mcstructure"
