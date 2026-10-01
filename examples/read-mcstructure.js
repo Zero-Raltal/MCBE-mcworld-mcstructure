@@ -28,7 +28,8 @@ function readMcstructure(filePath) {
     console.log('共', palette.length, '项');
     for (let i = 0; i < Math.min(palette.length, 20); i++) {
         const p = palette[i];
-        // ★ 修复：palette 条目是对象 {name: {type, value}, states: {type, value}, version: {type, value}}
+        // ★ 修复：palette 条目是对象 {name: {type, value}, states: {...}, version: {...}}
+        // 不是数组，不能用 p.find(...)
         const name = p.name.value;
         console.log(' ', i, ':', name);
     }
@@ -41,7 +42,7 @@ function readMcstructure(filePath) {
     for (let i = 0; i < blockIndices0.length; i++) {
         const idx = blockIndices0[i];
         if (idx < 0) continue;
-        // ★ 修复：同上
+        // ★ 修复：同上，用 p.name.value
         const name = palette[idx].name.value;
         counts[name] = (counts[name] || 0) + 1;
     }
@@ -55,16 +56,36 @@ function readMcstructure(filePath) {
     if (bpd && bpd.value) {
         const keys = Object.keys(bpd.value);
         console.log('共', keys.length, '个');
+
         for (const key of keys) {
+            // ★ 键是扁平索引字符串，反推坐标
+            const structIdx = parseInt(key, 10);
+            let coordStr = '';
+            if (!isNaN(structIdx)) {
+                const sx = Math.floor(structIdx / (sizeY * sizeZ));
+                const rem = structIdx % (sizeY * sizeZ);
+                const sy = Math.floor(rem / sizeZ);
+                const sz = rem % sizeZ;
+                coordStr = ' → (' + sx + ',' + sy + ',' + sz + ')';
+            }
+
             const beData = bpd.value[key].value.block_entity_data.value;
             const id = beData.id ? beData.id.value : '(无)';
-            console.log(' ', key, ':', id);
+            console.log(' "' + key + '"' + coordStr + ' → ' + id);
 
-            if (id === 'CommandBlock' && beData.Command) {
-                console.log('    指令:', beData.Command.value);
+            if (id === 'CommandBlock') {
+                const cmd = beData.Command ? beData.Command.value : '(空)';
+                console.log('    指令:', cmd);
+                if (beData.auto) {
+                    console.log('    模式:', beData.auto.value === 1 ? '自动' : '红石控制');
+                }
             }
             if (id === 'Sign' && beData.FrontText) {
                 console.log('    正面:', beData.FrontText.value.Text.value);
+            }
+            if (id === 'Chest' && beData.Items) {
+                const items = beData.Items.value.items || [];
+                console.log('    物品数:', items.length);
             }
         }
     }
