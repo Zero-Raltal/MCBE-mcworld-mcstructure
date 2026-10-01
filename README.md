@@ -381,7 +381,7 @@ A: 不行。Java 版格式完全不同，本项目只支持基岩版。
 
 ## License
 
-[CC BY 4.0](./LICENSE) —— 随意商用 / 改写 / 分发，保留出处即可。
+[MIT](./LICENSE)
 
 ---
 
@@ -399,5 +399,7 @@ A: 不行。Java 版格式完全不同，本项目只支持基岩版。
 **如果这个项目帮到了你，给个 Star 吧！**
 
 Made with ❤️ for the Minecraft Bedrock modding community
+
+ZeroRaltal
 
 </div>
