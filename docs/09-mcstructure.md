@@ -194,7 +194,38 @@ TAG_Int "状态名" = 值
 
 **状态值类型**可能是 Byte / Int / String，取决于方块。
 
-### 5.3 构造代码
+### 5.3 读取 palette（⚠️ 解析结果形态）
+
+用 `parseNbt` 解析后的 palette 条目是**对象**，不是数组：
+
+```javascript
+const p = palette[i];
+// p 的形态：
+{
+    name:    { type: 'String', value: 'minecraft:stone' },
+    states:  { type: 'Compound', value: {...} },
+    version: { type: 'Int', value: 18168865 }
+}
+
+// ✅ 读方块名：
+const blockName = p.name.value;
+
+// ❌ 不要写成：
+// const blockName = p.find(x => x.name === 'name').value.value;   // 错！p 不是数组
+```
+
+**注意区分**：
+
+| 场景 | palette 条目的形态 |
+|------|------------------|
+| 写入时（构造 NBT） | 数组 `[{name, type, value}, ...]` |
+| 读取时（parseNbt 结果） | 对象 `{name: {type, value}, ...}` |
+
+两种形态**不一致**，读写时都要注意。
+
+### 5.4 构造 palette 条目
+
+**构造代码**：
 
 ```javascript
 function makeBlockPaletteEntry(name, states) {
@@ -226,31 +257,47 @@ const paletteEntries = palette.map(function(p) {
 });
 ```
 
-### 5.4 block_position_data（**关键**）
+### 5.5 block_position_data（**关键**）
 
 **格式**：
 
 ```
 TAG_Compound "block_position_data"
-  ├── "0,0,0"     (TAG_Compound)
+  ├── "0"       (TAG_Compound)
   │     └── block_entity_data (TAG_Compound)
-  ├── "3,5,-2"    (TAG_Compound)
+  ├── "536"     (TAG_Compound)
   │     └── block_entity_data (TAG_Compound)
+  ├── "1027"
+  │     └── block_entity_data
   ...
 ```
 
-**⚠️ 三条黄金规则**（详见 `07-blockentity.md`）：
+**⚠️ 三条黄金规则**（详见 `07-blockentity.md` §3）：
 
-1. 键是 `"sx,sy,sz"` 字符串（相对坐标，无空格）
+1. **键是 `String(structIdx)`**（扁平索引，不是坐标字符串）
 2. 值包一层 `block_entity_data`
-3. BE 内 x/y/z 也是相对坐标
+3. BE 内 x/y/z 用**结构相对坐标**
 
-**构造代码**：
+**⚠️ 最常见的错误**：键写成 `"8,1,8"` 这样的坐标。
+
+游戏读取时用 `Number(key)` 得到索引：
+
+- `Number("536")` = `536` ✅
+- `Number("8,1,8")` = `NaN` → 静默跳过 ❌
+
+**正确构造代码**：
 
 ```javascript
+// 收集阶段
+const blockPositionData = {};   // { [String(structIdx)]: entriesArray }
+
+const structIdx = (sx * sizeY + sy) * sizeZ + sz;
+blockPositionData[String(structIdx)] = entries;   // ★ 键是索引字符串
+
+// 写入阶段
 const bpEntries = Object.keys(blockPositionData).map(function(key) {
     return {
-        name: key,
+        name: key,                     // "536"
         type: 10,
         value: [
             { name: 'block_entity_data', type: 10, value: blockPositionData[key] }
@@ -341,6 +388,27 @@ function parseMcstructure(bytes) {
 }
 ```
 
+**遍历 BE 时**：
+
+```javascript
+for (const key of Object.keys(blockPositionData)) {
+    // ★ 键是扁平索引字符串，例如 "536"
+    const structIdx = parseInt(key, 10);
+
+    // 反推坐标
+    const sx = Math.floor(structIdx / (sizeY * sizeZ));
+    const rem = structIdx % (sizeY * sizeZ);
+    const sy = Math.floor(rem / sizeZ);
+    const sz = rem % sizeZ;
+
+    // 拿到 BE 数据
+    const beData = blockPositionData[key].value.block_entity_data.value;
+
+    console.log('BE @ (' + sx + ',' + sy + ',' + sz + ')',
+                'id=' + (beData.id ? beData.id.value : '(无)'));
+}
+```
+
 ## 8. 陷阱清单
 
 ### 8.1 索引顺序错
@@ -351,20 +419,30 @@ function parseMcstructure(bytes) {
 ✅ (sx * sizeY + sy) * sizeZ + sz       （正确）
 ```
 
-### 8.2 block_position_data 键格式
+### 8.2 ⚠️ `block_position_data` 键格式
 
 ```
-❌ "0" / "1" / "2"
-❌ "3, 5, -2"     （有空格）
-❌ "100,64,200"   （世界坐标）
-✅ "3,5,-2"
+❌ "0" / "1" / "2"          （连续序号）
+❌ "8,1,8"                   （坐标字符串，无空格）
+❌ "3, 5, -2"                （坐标字符串，有空格）
+❌ "100,64,200"              （世界坐标）
+✅ "536"                     （扁平索引，String(structIdx)）
+```
+
+**测试**：
+
+```javascript
+// 结构尺寸 16×4×16，方块在 (8, 1, 8)
+const sizeY = 4, sizeZ = 16;
+const structIdx = (8 * sizeY + 1) * sizeZ + 8;   // 536
+console.log(String(structIdx));                   // "536"
 ```
 
 ### 8.3 缺 block_entity_data 包装
 
 ```
-❌ { name: "3,5,-2", value: [{ name: 'id', ... }] }
-✅ { name: "3,5,-2", value: [{ name: 'block_entity_data', value: [{ name: 'id', ... }] }] }
+❌ { name: "536", value: [{ name: 'id', ... }] }
+✅ { name: "536", value: [{ name: 'block_entity_data', value: [{ name: 'id', ... }] }] }
 ```
 
 ### 8.4 size 顺序错
@@ -405,6 +483,16 @@ function parseMcstructure(bytes) {
 
 **建议**：用 18168865。
 
+### 8.8 读取 palette 时 p 是对象不是数组
+
+```javascript
+// ❌ 错误（p 是对象，没有 find 方法）
+const name = p.find(x => x.name === 'name').value.value;
+
+// ✅ 正确
+const name = p.name.value;
+```
+
 ## 9. 与 mcworld 的对照表
 
 | mcstructure 字段 | mcworld 对应 |
@@ -416,6 +504,16 @@ function parseMcstructure(bytes) {
 | palette.default.block_position_data | chunk 的 0x31 键 |
 | structure_world_origin | 用户指定的放置位置 |
 
+**关键差异**：
+
+| 项目 | mcstructure | mcworld |
+|------|-------------|---------|
+| 索引顺序 | XYZ `(x*sizeY+y)*sizeZ+z` | XZY `lx*256+lz*16+ly` |
+| 索引类型 | Int32 数组 | 位打包 |
+| BE 键 | 扁平索引字符串 | 无键（按坐标匹配） |
+| BE 内 x/y/z | 结构相对坐标 | 世界坐标 |
+| palette | 全局一份 | 每子区块独立 |
+
 ## 10. 自检清单
 
 - [ ] 根是 Compound (10)
@@ -425,12 +523,13 @@ function parseMcstructure(bytes) {
 - [ ] `block_indices` 有两层
 - [ ] 每层长度 = sizeX * sizeY * sizeZ
 - [ ] layer 1 全空时用全 -1 数组（不要省略）
-- [ ] `block_position_data` 的键是 `"sx,sy,sz"`
+- [ ] `block_position_data` 的键是 `String(structIdx)`（扁平索引）
 - [ ] 每个 BE 包了 `block_entity_data`
 - [ ] BE 内 x/y/z 用结构相对坐标
 - [ ] palette 里每个条目有 name / states / version
 - [ ] version 是 18168865
 - [ ] `structure_world_origin` 是 3 个 Int
+- [ ] 读取 palette 时用 `p.name.value` 而不是 `p.find(...)`
 
 ## 11. 参考
 
