@@ -79,4 +79,4 @@ Demo 页面提供 4 个操作：
 
 ## License
 
-MII
+MIT
