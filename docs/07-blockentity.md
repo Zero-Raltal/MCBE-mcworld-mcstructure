@@ -27,6 +27,8 @@
 - BE 数量少（一个 chunk 可能 0~10 个），不占空间
 - BE 数据**独立于方块**（方块被破坏时 BE 也删）
 
+---
+
 ## 2. mcworld 侧的存储（`0x31` 键）
 
 ### 2.1 键格式
@@ -70,10 +72,10 @@ function parseBlockEntities(buf) {
 
 ```javascript
 function serializeBlockEntities(beList) {
-    // beList 是 [{ id, x, y, z, ... }, ...]
-    // 或者 [{ name, type, value }, ...] 形式的 entries 数组
+    // beList 是 [Uint8Array, Uint8Array, ...]，每个是 bSerializeBE(entries) 的结果
+    let totalLen = 0;
+    for (const be of beList) totalLen += be.length;
 
-    const totalLen = beList.reduce((sum, be) => sum + be.length, 0);
     const combined = new Uint8Array(totalLen);
     let off = 0;
     for (const be of beList) {
@@ -87,7 +89,7 @@ function serializeBlockEntities(beList) {
 **实际使用**：
 
 ```javascript
-const beList = [];   // 每个元素是 bSerializeBE(entries) 结果
+const beList = [];
 for (const be of blockEntityList) {
     beList.push(bSerializeBE(parsedToWriterEntries(be)));
 }
@@ -118,33 +120,47 @@ entries.push({
 2. **分区块导出**：把大结构拆成多个 mcstructure
 3. **减少单 chunk 命令方块数量**：重新设计结构布局
 
+---
+
 ## 3. mcstructure 侧的存储（`block_position_data`）
 
 ### 3.1 结构
 
 ```
 TAG_Compound "block_position_data"
-  ├── "0,0,0"     (TAG_Compound)
+  ├── "0"       (TAG_Compound)     ← 键是扁平索引的字符串
   │     └── block_entity_data (TAG_Compound)
-  ├── "3,5,-2"    (TAG_Compound)
+  ├── "536"     (TAG_Compound)
   │     └── block_entity_data (TAG_Compound)
-  ├── "10,2,7"
+  ├── "1027"
   │     └── block_entity_data
   ...
 ```
 
+**扁平索引** = `(sx * sizeY + sy) * sizeZ + sz`（与 `block_indices` 数组里的索引一致）。
+
+**⚠️ 关键：键是索引，不是坐标。** 社区流传的"键必须是 `'sx,sy,sz'` 字符串"是**错误**的。实测游戏只认扁平索引。
+
 ### 3.2 三条黄金规则
 
-1. **键必须是 `"sx,sy,sz"` 字符串**（相对坐标，逗号分隔，无空格）
+1. **键必须是 `String(structIdx)`**（扁平索引的字符串形式，不是坐标、不是序号）
 2. **值必须再包一层 `block_entity_data`**
-3. **BE 内的 `x/y/z` 也必须是结构相对坐标**（与键一致）
+3. **BE 内的 `x/y/z` 是结构相对坐标**（与键索引反推出的坐标一致）
 
 ### 3.3 ✅ 正确写法
 
 ```javascript
+// 收集阶段：键用扁平索引，值是该 BE 的 entries 数组
+const blockPositionData = {};   // { [String(structIdx)]: entriesArray }
+
+// 假设在 (sx, sy, sz) 处有 BE
+const structIdx = (sx * sizeY + sy) * sizeZ + sz;
+blockPositionData[String(structIdx)] = entries;   // ★ 键是 String(structIdx)
+
+// 写入阶段：遍历并构造 NBT 条目
 const bpEntries = Object.keys(blockPositionData).map(function(key) {
     return {
-        name: key,                     // "3,5,-2"
+        name: key,                     // "536"
         type: 10,
         value: [
             { name: 'block_entity_data', type: 10, value: blockPositionData[key] }
@@ -157,40 +173,51 @@ const bpEntries = Object.keys(blockPositionData).map(function(key) {
 
 ```javascript
 blockPositionData = {
-    "3,5,-2": [  // entries 数组，形如 [{ name, type, value }, ...]
+    "536": [  // entries 数组，形如 [{ name, type, value }, ...]
         { name: 'id', type: 8, value: 'CommandBlock' },
         { name: 'Command', type: 8, value: 'say hello' },
-        { name: 'x', type: 3, value: 3 },
-        { name: 'y', type: 3, value: 5 },
-        { name: 'z', type: 3, value: -2 },
+        { name: 'x', type: 3, value: 8 },
+        { name: 'y', type: 3, value: 1 },
+        { name: 'z', type: 3, value: 8 },
         ...
     ],
-    "10,2,7": [ ... ]
+    "1027": [ ... ]
 }
 ```
 
 ### 3.4 ❌ 错误写法
 
-**错误 1**：用扁平整数索引当键
+**错误 1**：键写成 `"sx,sy,sz"` 坐标字符串
 
 ```javascript
-// ❌ 游戏会忽略所有 BE
+// ❌ 游戏按索引匹配，坐标字符串找不到
+const bpEntries = [
+    { name: '8,1,8', type: 10, value: [...] },
+    { name: '3,5,-2', type: 10, value: [...] }
+];
+```
+
+**错误 2**：键写成连续序号
+
+```javascript
+// ❌ 序号不是索引，游戏找不到对应的方块
 const bpEntries = [];
-for (let i = 0; i < beList.length; i++) {
+let i = 0;
+for (const be of beList) {
     bpEntries.push({
-        name: String(i),           // "0", "1", "2"...
+        name: String(i++),         // "0", "1", "2"...
         type: 10,
-        value: [{ name: 'block_entity_data', type: 10, value: beList[i] }]
+        value: [{ name: 'block_entity_data', type: 10, value: be }]
     });
 }
 ```
 
-**错误 2**：忘了包 `block_entity_data`
+**错误 3**：忘了包 `block_entity_data`
 
 ```javascript
 // ❌ 游戏找不到 BE
 {
-    name: "3,5,-2",
+    name: "536",
     type: 10,
     value: [  // 直接是 BE 字段，没包 block_entity_data
         { name: 'id', type: 8, value: 'CommandBlock' },
@@ -199,29 +226,64 @@ for (let i = 0; i < beList.length; i++) {
 }
 ```
 
-**错误 3**：键用世界坐标
+**错误 4**：BE 内的 x/y/z 用了世界坐标
 
 ```javascript
-// ❌ 游戏按相对坐标找，找不到
+// ❌ 游戏按结构相对坐标匹配，世界坐标找不到
 {
-    name: "100,64,200",    // 世界坐标，不是结构相对坐标
-    ...
+    name: "536",
+    type: 10,
+    value: [
+        { name: 'block_entity_data', type: 10, value: [
+            { name: 'id', type: 8, value: 'CommandBlock' },
+            { name: 'x', type: 3, value: 100 },      // 世界坐标，错！
+            { name: 'y', type: 3, value: 64 },
+            { name: 'z', type: 3, value: 200 }
+        ]}
+    ]
 }
 ```
 
-### 3.5 为什么游戏只认 `"sx,sy,sz"` 键
+### 3.5 为什么游戏只认扁平索引
 
-**游戏的读取逻辑**（逆向推断）：
+**游戏的读取逻辑**（实测确认）：
 
 ```
 1. 遍历 block_position_data 的每个条目
-2. 用 key 正则解析 "(-?\d+),(-?\d+),(-?\d+)" 得到 (sx, sy, sz)
-3. 用 (sx, sy, sz) 从 block_indices 里找到对应的方块
-4. 如果方块是 air，跳过（不会挂 BE 到空气）
+2. 用 key 解析出整数 idx = Number(key)
+3. 在 block_indices[0][idx] 找到对应方块
+4. 如果方块是 air，跳过
 5. 把 block_entity_data 内容挂到该方块
 ```
 
-**如果键不匹配这个正则**：游戏直接跳过。**不会报错，静默忽略**。
+**如果 key 不是合法整数**（例如 `"8,1,8"`）：
+
+- `Number("8,1,8")` 得到 `NaN`
+- 游戏**静默跳过**该条目，**不报错**
+- 结果：**所有 BE 丢失，但方块本身还在**（因为方块数据在 `block_indices` 里是对的）
+
+**这就是"命令方块在游戏里是空的、但方块本身还在"的原因。**
+
+**为什么社区会流传"键必须是 `'x,y,z'`"**：
+
+早期某个工具或文档误传了这个说法，后来被大量复制。可能是**从 mcworld 的"按坐标匹配"逻辑反向猜测**的，但 mcstructure 采用的是**索引匹配**，不是坐标匹配。
+
+### 3.6 反向推导：从 structIdx 得到坐标
+
+如果拿到一个键（例如 `"536"`），想反推它在结构里的 (sx, sy, sz)：
+
+```javascript
+const structIdx = Number(key);   // 536
+const sx = Math.floor(structIdx / (sizeY * sizeZ));
+const rem = structIdx % (sizeY * sizeZ);
+const sy = Math.floor(rem / sizeZ);
+const sz = rem % sizeZ;
+// → (8, 1, 8)
+```
+
+**这个坐标通常只在调试时用**，游戏不依赖它，它只依赖 `Number(key)` 得到的索引。
+
+---
 
 ## 4. BE 数据完整性
 
@@ -229,6 +291,7 @@ for (let i = 0; i < beList.length; i++) {
 
 ```
 BlockEntityVersion  Int      (可选)
+isMovable           Byte     1 = 可被推动
 Command             String   ★ 命令内容
 CustomName          String   自定义名称（显示在 GUI 上）
 ExecuteOnFirstTick  Byte
@@ -241,13 +304,25 @@ LastOutputParams    List     (可过滤)
 SuccessCount        Int
 TickDelay           Int
 TrackOutput         Byte
-Version             Int
-auto                Byte     自动执行
+Version             Int      方块定义版本（19 = 1.19.10）
+auto                Byte     0=红石控制，1=自动执行（无所谓，游戏自会更新）
 conditionMet        Byte
 id                  String   ★ "CommandBlock"
 powered             Byte
-x / y / z           Int      ★ 坐标
+x / y / z           Int      ★ 结构相对坐标
 ```
+
+**⚠️ 关键字段**：
+
+- `id`：必须存在，值 `"CommandBlock"`
+- `Command`：命令内容
+- `x` / `y` / `z`：**结构相对坐标**（不是世界坐标）
+- `Version`：19（1.19.10），可以更小
+
+**非关键字段**（游戏会自动补全/忽略）：
+
+- `auto`、`facing_direction`（在 palette 里）、`powered`、`conditionMet` 等
+- 只要 `id` / `Command` / `x/y/z` 对，游戏就能读到
 
 ### 4.2 告示牌字段
 
@@ -308,12 +383,14 @@ Items               List     输入 / 燃料 / 输出
 x / y / z           Int
 ```
 
+---
+
 ## 5. 完整流程
 
 ### 5.1 mcworld → mcstructure 的 BE 收集
 
 ```javascript
-const blockPositionData = {};
+const blockPositionData = {};   // { [String(structIdx)]: entries }
 let beTotal = 0, beKept = 0, beFail = 0;
 
 for (const beBuf of beBufList) {
@@ -337,7 +414,11 @@ for (const beBuf of beBufList) {
                 continue;
             }
 
+            // 世界坐标 → 结构相对坐标
             const sx = bx - x1, sy = by - y1, sz = bz - z1;
+
+            // ★★★ 关键：计算扁平索引 ★★★
+            const structIdx = (sx * sizeY + sy) * sizeZ + sz;
 
             const entryList = parsedToWriterEntries(be);
             for (const ent of entryList) {
@@ -346,12 +427,14 @@ for (const beBuf of beBufList) {
                 else if (ent.name === 'z' && ent.type === 3) ent.value = sz;
             }
 
-            // ★ 键必须是 "sx,sy,sz"
-            blockPositionData[sx + ',' + sy + ',' + sz] = entryList;
+            // ★★★ 键是 String(structIdx) ★★★
+            blockPositionData[String(structIdx)] = entryList;
             beKept++;
         } catch (e) { beFail++; break; }
     }
 }
+
+console.log('BE 统计: 读到', beTotal, ', 保留', beKept, ', 失败', beFail);
 ```
 
 ### 5.2 mcstructure → mcworld 的 BE 处理
@@ -367,14 +450,16 @@ if (defaultCompound.block_position_data && defaultCompound.block_position_data.v
         if (!beData.block_entity_data || !beData.block_entity_data.value) continue;
         const be = beData.block_entity_data.value;
 
-        // 从键解析相对坐标
+        // ★ 从键（扁平索引）反推结构相对坐标
         let sx = null, sy = null, sz = null;
-        const cm = key.match(/^(-?\d+),\s*(-?\d+),\s*(-?\d+)$/);
-        if (cm) {
-            sx = parseInt(cm[1]);
-            sy = parseInt(cm[2]);
-            sz = parseInt(cm[3]);
+        const structIdx = parseInt(key, 10);
+        if (!isNaN(structIdx)) {
+            sx = Math.floor(structIdx / (sizeY * sizeZ));
+            const rem = structIdx % (sizeY * sizeZ);
+            sy = Math.floor(rem / sizeZ);
+            sz = rem % sizeZ;
         } else if (be.x && be.y && be.z) {
+            // 兜底：如果键不是数字，从 BE 内的 x/y/z 拿
             sx = Number(be.x.value);
             sy = Number(be.y.value);
             sz = Number(be.z.value);
@@ -383,8 +468,8 @@ if (defaultCompound.block_position_data && defaultCompound.block_position_data.v
 
         // 补全 id
         if (!be.id) {
-            const structIdx = (sx * sizeY + sy) * sizeZ + sz;
-            const palIdx = blockIndices0[structIdx];
+            const idx2 = (sx * sizeY + sy) * sizeZ + sz;
+            const palIdx = blockIndices0[idx2];
             if (palIdx >= 0) {
                 const bn = palette[palIdx].name.value;
                 const inferred = BLOCK_TO_BE_ID[bn];
@@ -392,7 +477,7 @@ if (defaultCompound.block_position_data && defaultCompound.block_position_data.v
             }
         }
 
-        // 转回世界坐标
+        // 结构相对坐标 → 世界坐标
         const worldX = px + sx, worldY = py + sy, worldZ = pz + sz;
 
         const beEntries = parsedToWriterEntries(be);
@@ -409,6 +494,8 @@ if (defaultCompound.block_position_data && defaultCompound.block_position_data.v
     }
 }
 ```
+
+---
 
 ## 6. BE id 推断表
 
@@ -470,9 +557,7 @@ const BLOCK_TO_BE_ID = {
     'minecraft:pistonarmcollision': 'PistonArm',
     'minecraft:sticky_pistonarmcollision': 'PistonArm',
     'minecraft:cauldron': 'Cauldron',
-    'minecraft:lava_cauldron': 'Cauldron',
-    'minecraft:daylight_detector': 'DaylightDetector',
-    'minecraft:daylight_detector_inverted': 'DaylightDetector'
+    'minecraft:lava_cauldron': 'Cauldron'
 };
 ```
 
@@ -490,26 +575,40 @@ if (!be.id) {
 }
 ```
 
+---
+
 ## 7. 陷阱清单
 
-### 7.1 block_position_data 键格式
+### 7.1 ⚠️ `block_position_data` 键格式（**最关键**）
 
 ```
-❌ "0" / "1" / "2"        （扁平索引）
-❌ "3, 5, -2"              （带空格）
-❌ "100,64,200"            （世界坐标）
-❌ "{x:3, y:5, z:-2}"     （JSON 格式）
-✅ "3,5,-2"                （纯数字，逗号分隔，无空格）
+❌ "0" / "1" / "2"          （连续序号，不是索引）
+❌ "3, 5, -2"                （坐标字符串，带空格）
+❌ "8,1,8"                   （坐标字符串，不带空格）
+❌ "100,64,200"              （世界坐标）
+❌ "{x:3, y:5, z:-2}"       （JSON 格式）
+✅ "536"                     （扁平索引的字符串，与 block_indices 的索引一致）
 ```
+
+**测试方法**：
+
+```javascript
+// 假设结构尺寸 16×4×16，BE 在 (8, 1, 8)
+const sizeY = 4, sizeZ = 16;
+const structIdx = (8 * sizeY + 1) * sizeZ + 8;   // = 536
+console.log(String(structIdx));                   // "536"
+```
+
+**为什么不能写坐标**：游戏用 `Number(key)` 得到索引。`Number("8,1,8")` = `NaN`，静默跳过。
 
 ### 7.2 缺 block_entity_data 包装
 
 ```javascript
 // ❌ 直接放 BE 字段
-{ name: "3,5,-2", type: 10, value: [{ name: 'id', type: 8, value: 'CommandBlock' }] }
+{ name: "536", type: 10, value: [{ name: 'id', type: 8, value: 'CommandBlock' }] }
 
 // ✅ 包一层
-{ name: "3,5,-2", type: 10, value: [
+{ name: "536", type: 10, value: [
     { name: 'block_entity_data', type: 10, value: [
         { name: 'id', type: 8, value: 'CommandBlock' }
     ]}
@@ -518,9 +617,9 @@ if (!be.id) {
 
 ### 7.3 x/y/z 坐标系统一
 
-**mcstructure 侧**：BE 内的 x/y/z 用**结构相对坐标**（与 block_position_data 键一致）。
+**mcstructure 侧**：BE 内的 x/y/z 用**结构相对坐标**。
 
-**mcworld 侧**：BE 内的 x/y/z 用**世界坐标**（与 chunk key 一致）。
+**mcworld 侧**：BE 内的 x/y/z 用**世界坐标**。
 
 **转换时务必转换**：
 
@@ -540,8 +639,6 @@ ent.value = ent.value + px;   // 或 py / pz
 ❌ "COMMAND_BLOCK"    （下划线）
 ```
 
-**参考**：mcworld 的 `0x31` 里 id 是驼峰；mcstructure 里 id 也是驼峰。
-
 ### 7.5 32KB 单条记录
 
 见 §2.5。**这是实际最常遇到的坑**。
@@ -554,6 +651,24 @@ ent.value = ent.value + px;   // 或 py / pz
 
 **结论**：过滤 `LastOutput` 是必须的，但仍要控制单 chunk BE 数量。
 
+**`facing_direction` 和 `auto` 都不关键** —— 游戏会自己按实际红石状态更新，**不用纠结这两个值**。
+
+### 7.7 BE 键用整数还是字符串
+
+**必须用字符串**。NBT Compound 的字段名（name）**只能是字符串**，不能是整数。
+
+```javascript
+// ✅ 字符串
+{ name: "536", type: 10, value: [...] }
+
+// ❌ 整数（NBT 层不支持）
+{ name: 536, type: 10, value: [...] }
+```
+
+`bPutStr(a, 536)` 在写入端会把 536 隐式转换为字符串 `"536"`，但为了清晰起见，**显式 `String(structIdx)` 更稳**。
+
+---
+
 ## 8. 验证方法
 
 ### 8.1 调试日志
@@ -562,7 +677,9 @@ ent.value = ent.value + px;   // 或 py / pz
 if (beDbg < 3) {
     beDbg++;
     log('[BE调试] id=' + (be.id ? be.id.value : '(无)') +
-        ' 坐标=(' + bx + ',' + by + ',' + bz + ')' +
+        ' 世界坐标=(' + bx + ',' + by + ',' + bz + ')' +
+        ' 结构坐标=(' + sx + ',' + sy + ',' + sz + ')' +
+        ' 索引=' + structIdx +
         ' 字段=' + Object.keys(be).join(','));
 }
 ```
@@ -570,28 +687,33 @@ if (beDbg < 3) {
 **期望输出**：
 
 ```
-[BE调试] id=CommandBlock 坐标=(0,-60,0) 字段=BlockEntityVersion,Command,CustomName,...,x,y,z
-[BE调试] id=Sign 坐标=(5,-60,3) 字段=id,FrontText,BackText,x,y,z
+[BE调试] id=CommandBlock 世界坐标=(8,-63,8) 结构坐标=(8,1,8) 索引=536 字段=id,x,y,z,Command,...
 ```
-
-**看到 `Command` 字段** → 数据完整。
 
 ### 8.2 NBT 查看器
 
 用 NBT Studio 打开 `.mcstructure`：
 
+**✅ 正确**：
+
 ```
 palette.default.block_position_data:
-  "3,5,-2":
+  "536":                                    ← 数字字符串
     block_entity_data:
       id: "CommandBlock"
       Command: "say hello"
-      x: 3
-      y: 5
-      z: -2
+      x: 8
+      y: 1
+      z: 8
 ```
 
-**如果看到 `"0"`, `"1"`, `"2"` 这样的键** → 就是 §7.1 的错误，游戏会忽略。
+**❌ 错误**（游戏会忽略）：
+
+```
+palette.default.block_position_data:
+  "8,1,8":                                  ← 坐标字符串
+    block_entity_data: { ... }
+```
 
 ### 8.3 游戏内测试
 
@@ -600,19 +722,26 @@ palette.default.block_position_data:
 3. 打开告示牌 → 应显示正反面文字
 4. 打开箱子 → 应保留物品
 
+---
+
 ## 9. 自检清单
 
-- [ ] block_position_data 键是 `"sx,sy,sz"` 字符串（无空格）
+- [ ] block_position_data 键是 `String(structIdx)`（扁平索引字符串）
+- [ ] 键计算正确：`(sx * sizeY + sy) * sizeZ + sz`
 - [ ] 每个值都包了 `block_entity_data`
-- [ ] BE 内 x/y/z 用结构相对坐标
+- [ ] BE 内 x/y/z 用结构相对坐标（mcstructure 侧）
 - [ ] mcworld 侧 BE 内 x/y/z 用世界坐标
 - [ ] BE id 是驼峰（CommandBlock / Sign / Chest）
 - [ ] 缺失 id 时从方块名推断
 - [ ] 单条 `0x31` 记录 < 32 KB
 - [ ] 过滤了 `LastOutput` / `LastOutputParams`（除非明确要保留）
 - [ ] BE 坐标在结构范围内
+- [ ] `facing_direction` 和 `auto` 的值**不用纠结**（游戏自会更新）
+
+---
 
 ## 10. 参考
 
 - BlockEntity 列表：https://minecraft.fandom.com/wiki/Block_entity
-- 命令方块字段：https://minecraft.fandom.com/wiki/Command_Block#Block_data
+- 命令方块字段：https://minecraft.fandom.com/wiki/Command_Block
+- mcstructure schema：https://learn.microsoft.com/en-us/minecraft/creator/reference/content/schemasreference/schemas/minecraftschema_blocks_1.0.0
