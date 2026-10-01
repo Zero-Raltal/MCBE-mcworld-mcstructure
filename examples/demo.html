@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>minecraft-bedrock-codec · 浏览器 Demo</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --card: #fff;
+    --border: #ddd;
+    --primary: #4CAF50;
+    --primary-hover: #45a049;
+    --danger: #d32f2f;
+    --text: #222;
+    --muted: #666;
+    --code-bg: #1e1e1e;
+    --code-fg: #d4d4d4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 1080px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  h1 { margin: 0 0 0.25rem 0; font-size: 1.6rem; }
+  .subtitle { color: var(--muted); margin-bottom: 1.5rem; font-size: 0.9rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .card h2 { margin: 0; font-size: 1.05rem; color: #333; }
+  .card p { margin: 0; font-size: 0.85rem; color: var(--muted); }
+  button {
+    padding: 0.6rem 1.1rem;
+    font-size: 0.95rem;
+    cursor: pointer;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    transition: background 0.15s;
+  }
+  button:hover:not(:disabled) { background: var(--primary-hover); }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  input[type="file"] {
+    font-size: 0.85rem;
+    padding: 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: #fafafa;
+  }
+  #log {
+    margin-top: 1.5rem;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 1rem;
+    border-radius: 8px;
+    font-family: "Cascadia Code", "Consolas", "Monaco", monospace;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 480px;
+    overflow: auto;
+  }
+  .log-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+  .log-header h2 { margin: 0; font-size: 1.05rem; }
+  .btn-ghost {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    font-size: 0.8rem;
+    padding: 0.3rem 0.7rem;
+  }
+  .btn-ghost:hover { background: #f0f0f0; color: var(--text); }
+  .log-info { color: #4ec9b0; }
+  .log-warn { color: #dcdcaa; }
+  .log-error { color: #f48771; }
+  .log-ok { color: #6a9955; }
+  .tag {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: #e8f5e9;
+    color: #2e7d32;
+    font-size: 0.75rem;
+    font-weight: bold;
+    margin-right: 0.4rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>minecraft-bedrock-codec · 浏览器 Demo</h1>
+<p class="subtitle">
+  纯前端运行 <code>examples/</code> 下的 4 个示例 ·
+  <a href="https://github.com/" target="_blank">GitHub</a> ·
+  依赖：<code>jszip</code> + <code>pako</code>（CDN） + <code>../examples/utils.js</code>
+</p>
+
+<div class="grid">
+
+  <!-- 读 mcworld -->
+  <div class="card">
+    <h2>① 读取 .mcworld</h2>
+    <p>输出方块统计和所有方块实体（命令方块指令、告示牌文字）。</p>
+    <input type="file" id="fileReadWorld" accept=".mcworld,.zip">
+    <button id="btnReadWorld" disabled>读取并统计</button>
+  </div>
+
+  <!-- 写 mcworld -->
+  <div class="card">
+    <h2>② 生成 .mcworld</h2>
+    <p>生成一个 16×4×16 石头平台 + 一个命令方块（<code>say hello</code>）的测试世界。</p>
+    <button id="btnWriteWorld">生成并下载</button>
+  </div>
+
+  <!-- 读 mcstructure -->
+  <div class="card">
+    <h2>③ 读取 .mcstructure</h2>
+    <p>输出结构尺寸、调色板、方块统计、所有 BE。</p>
+    <input type="file" id="fileReadStruct" accept=".mcstructure">
+    <button id="btnReadStruct" disabled>读取并统计</button>
+  </div>
+
+  <!-- 写 mcstructure -->
+  <div class="card">
+    <h2>④ 生成 .mcstructure</h2>
+    <p>生成一个 16×4×16 石头平台 + 一个命令方块的结构文件。</p>
+    <button id="btnWriteStruct">生成并下载</button>
+  </div>
+
+</div>
+
+<div class="log-header">
+  <h2>输出</h2>
+  <button class="btn-ghost" id="btnClearLog">清空</button>
+</div>
+<div id="log">等待操作...</div>
+
+<!-- 依赖 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<script src="../examples/utils.js"></script>
+
+<script>
+// ============================================================
+// 日志
+// ============================================================
+const logEl = document.getElementById('log');
+
+function log(msg, cls) {
+    const line = cls ? `<span class="${cls}">${escapeHtml(String(msg))}</span>` : escapeHtml(String(msg));
+    logEl.innerHTML += line + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+}
+function logRaw(msg) {
+    logEl.innerHTML += msg + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+}
+function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+}
+function clearLog() { logEl.textContent = ''; }
+function hr() { logRaw('<span style="color:#555">──────────────────────────</span>'); }
+
+document.getElementById('btnClearLog').onclick = clearLog;
+
+// ============================================================
+// 下载工具
+// ============================================================
+function download(bytes, filename) {
+    const blob = new Blob([bytes], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ============================================================
+// ① 读取 .mcworld
+// ============================================================
+const fileReadWorld = document.getElementById('fileReadWorld');
+const btnReadWorld = document.getElementById('btnReadWorld');
+
+fileReadWorld.addEventListener('change', function () {
+    btnReadWorld.disabled = !this.files[0];
+});
+
+btnReadWorld.addEventListener('click', async function () {
+    const file = fileReadWorld.files[0];
+    if (!file) return;
+
+    clearLog();
+    log('[读取 mcworld] ' + file.name, 'log-info');
+    log('文件大小: ' + (file.size / 1024).toFixed(1) + ' KB');
+    hr();
+
+    try {
+        const u = window.McCodec;
+        const zip = await JSZip.loadAsync(file);
+
+        // 找 db 文件
+        const ldbFiles = [];
+        zip.forEach(function (path) {
+            if (path.startsWith('db/') && (path.endsWith('.ldb') || path.endsWith('.log'))) {
+                ldbFiles.push(path);
+            }
+        });
+        log('db 文件: ' + ldbFiles.join(', '));
+
+        // 解析所有 SSTable
+        const allEntries = [];
+        for (const path of ldbFiles) {
+            const bytes = await zip.file(path).async('uint8array');
+            const r = u.parseSSTable(bytes);
+            log(path + ' → ' + r.entries.length + ' 条 (magicOK=' + r.magicOK + ')');
+            for (const e of r.entries) allEntries.push(e);
+        }
+        hr();
+
+        // 分类
+        const subChunks = [];
+        const blockEntities = [];
+
+        for (const e of allEntries) {
+            if (e.key.length === 10 && e.key[8] === 0x2f) {
+                const view = new DataView(e.key.buffer, e.key.byteOffset, e.key.byteLength);
+                subChunks.push({
+                    cx: view.getInt32(0, true),
+                    cz: view.getInt32(4, true),
+                    subY: new Int8Array([e.key[9]])[0],
+                    value: e.value
+                });
+            } else if (e.key.length === 9 && e.key[8] === 0x31) {
+                blockEntities.push(e.value);
+            }
+        }
+        log('子区块数: ' + subChunks.length);
+        log('BE 条目数: ' + blockEntities.length);
+        hr();
+
+        // 遍历方块
+        const blockCount = {};
+        for (const sc of subChunks) {
+            const sub = u.parseSubChunk(sc.value);
+            if (!sub) continue;
+
+            for (let li = 0; li < sub.layers.length; li++) {
+                const layer = sub.layers[li];
+                for (let lx = 0; lx < 16; lx++) for (let ly = 0; ly < 16; ly++) for (let lz = 0; lz < 16; lz++) {
+                    const palIdx = u.getBitValue(layer.indexBytes, lx * 256 + lz * 16 + ly, layer.bits);
+                    if (palIdx < 0 || palIdx >= layer.palette.length) continue;
+                    const block = layer.palette[palIdx];
+                    if (block.name === 'minecraft:air') continue;
+                    blockCount[block.name] = (blockCount[block.name] || 0) + 1;
+                }
+            }
+        }
+
+        log('方块统计:', 'log-info');
+        const sorted = Object.entries(blockCount).sort((a, b) => b[1] - a[1]);
+        for (const [name, count] of sorted.slice(0, 20)) {
+            log('  ' + name + ': ' + count.toLocaleString());
+        }
+        hr();
+
+        // 遍历方块实体
+        log('方块实体:', 'log-info');
+        let beShown = 0;
+        for (const beBuf of blockEntities) {
+            const beList = u.parseBlockEntities(beBuf);
+            for (const be of beList) {
+                if (beShown >= 50) {
+                    log('  ... (仅显示前 50 个)');
+                    break;
+                }
+                beShown++;
+                const id = be.id ? be.id.value : '(无)';
+                const x = be.x ? be.x.value : '?';
+                const y = be.y ? be.y.value : '?';
+                const z = be.z ? be.z.value : '?';
+                log('  ' + id + ' @ (' + x + ', ' + y + ', ' + z + ')');
+
+                if (id === 'CommandBlock' && be.Command) {
+                    log('      指令: ' + be.Command.value, 'log-ok');
+                }
+                if (id === 'Sign' && be.FrontText) {
+                    log('      正面: ' + be.FrontText.value.Text.value, 'log-ok');
+                }
+            }
+            if (beShown >= 50) break;
+        }
+
+        hr();
+        log('✅ 完成', 'log-ok');
+
+    } catch (err) {
+        log('❌ ' + err.message, 'log-error');
+        console.error(err);
+    }
+});
+
+// ============================================================
+// ② 生成 .mcworld
+// ============================================================
+document.getElementById('btnWriteWorld').addEventListener('click', function () {
+    clearLog();
+    log('[生成 mcworld]', 'log-info');
+    hr();
+
+    try {
+        const u = window.McCodec;
+
+        const cx = 0, cz = 0, subY = -4;
+        const layer0Blocks = [];
+
+        // 石头平台
+        for (let lx = 0; lx < 16; lx++) {
+            for (let lz = 0; lz < 16; lz++) {
+                layer0Blocks.push({
+                    x: lx, y: 0, z: lz,
+                    name: 'minecraft:stone',
+                    states: {}
+                });
+            }
+        }
+        log('放置石头: ' + layer0Blocks.length + ' 个');
+
+        // 命令方块
+        layer0Blocks.push({
+            x: 8, y: 1, z: 8,
+            name: 'minecraft:command_block',
+            states: {
+                conditional_bit: { type: 'Byte', value: 0 },
+                facing_direction: { type: 'Int', value: 0 }
+            }
+        });
+        log('放置命令方块 @ (8, -63, 8)');
+
+        // 序列化 SubChunk
+        const subChunkBytes = u.serializeSubChunk(subY, [layer0Blocks]);
+        log('SubChunk: ' + subChunkBytes.length + ' 字节');
+
+        // 命令方块 BE
+        const beEntries = [
+            { name: 'id', type: 8, value: 'CommandBlock' },
+            { name: 'Command', type: 8, value: 'say hello' },
+            { name: 'CustomName', type: 8, value: '' },
+            { name: 'ExecuteOnFirstTick', type: 1, value: 1 },
+            { name: 'LPCommandMode', type: 3, value: 0 },
+            { name: 'LPCondionalMode', type: 1, value: 0 },
+            { name: 'LPRedstoneMode', type: 1, value: 0 },
+            { name: 'LastExecution', type: 4, value: 0 },
+            { name: 'SuccessCount', type: 3, value: 0 },
+            { name: 'TickDelay', type: 3, value: 0 },
+            { name: 'TrackOutput', type: 1, value: 1 },
+            { name: 'Version', type: 3, value: 19 },
+            { name: 'auto', type: 1, value: 1 },
+            { name: 'conditionMet', type: 1, value: 0 },
+            { name: 'powered', type: 1, value: 0 },
+            { name: 'x', type: 3, value: 8 },
+            { name: 'y', type: 3, value: -63 },
+            { name: 'z', type: 3, value: 8 }
+        ];
+        const beBytes = u.bSerializeBE(beEntries);
+
+        // 构建 db 条目
+        const entries = [];
+
+        function makeKey(cx, cz, tag, subY) {
+            const len = subY !== undefined ? 10 : 9;
+            const k = new Uint8Array(len);
+            const dv = new DataView(k.buffer);
+            dv.setInt32(0, cx, true);
+            dv.setInt32(4, cz, true);
+            k[8] = tag;
+            if (subY !== undefined) k[9] = subY & 0xFF;
+            return k;
+        }
+
+        entries.push({ key: makeKey(cx, cz, 0x2f, subY & 0xFF), value: subChunkBytes });
+        entries.push({ key: makeKey(cx, cz, 0x31), value: beBytes });
+
+        const v2b = new Uint8Array(540);
+        for (let i = 0; i < 270; i++) v2b[i * 2] = 0x04;
+
+        entries.push({ key: makeKey(cx, cz, 0x2b), value: v2b });
+        entries.push({ key: makeKey(cx, cz, 0x2c), value: new Uint8Array([0x2a]) });
+        entries.push({ key: makeKey(cx, cz, 0x36), value: new Uint8Array([2, 0, 0, 0]) });
+        entries.push({ key: makeKey(cx, cz, 0x3f), value: new Uint8Array([0xb5, 0x60, 0x75, 0xfd, 0x69, 0x2a, 0x3c, 0x93]) });
+        entries.push({ key: makeKey(cx, cz, 0x40), value: new Uint8Array([0x00, 0x0a]) });
+        entries.push({ key: makeKey(cx, cz, 0x41), value: new Uint8Array([0x00]) });
+        entries.push({ key: makeKey(cx, cz, 0x77), value: new Uint8Array(0) });
+
+        // SSTable
+        const ldbBytes = u.buildSSTable(entries);
+        log('SSTable: ' + ldbBytes.length + ' 字节');
+
+        // MANIFEST
+        const sortedKeys = entries.map(e => e.key).sort(function (a, b) {
+            const n = Math.min(a.length, b.length);
+            for (let i = 0; i < n; i++) {
+                if (a[i] !== b[i]) return a[i] - b[i];
+            }
+            return a.length - b.length;
+        });
+        const manifestRaw = u.buildManifestBytes(0, 5, ldbBytes.length, sortedKeys[0], sortedKeys[sortedKeys.length - 1]);
+        const manifestBytes = u.buildLogRecord(new Uint8Array(manifestRaw), 1);
+        log('MANIFEST: ' + manifestBytes.length + ' 字节');
+
+        // level.dat
+        const levelDat = u.buildLevelDat('Test World', 0, -60, 0);
+        log('level.dat: ' + levelDat.length + ' 字节');
+
+        // 打包 ZIP
+        const zip = new u.ZipBuilder();
+        zip.addFile('level.dat', levelDat);
+        zip.addFile('db/000005.ldb', ldbBytes);
+        zip.addFile('db/CURRENT', new TextEncoder().encode('MANIFEST-000004\n'));
+        zip.addFile('db/MANIFEST-000004', manifestBytes);
+        zip.addFile('levelname.txt', new TextEncoder().encode('Test World'));
+        zip.addFile('world_behavior_packs.json', new TextEncoder().encode('[]'));
+        zip.addFile('world_resource_packs.json', new TextEncoder().encode('[]'));
+
+        const zipBytes = zip.build();
+        log('ZIP: ' + zipBytes.length + ' 字节');
+
+        download(zipBytes, 'test.mcworld');
+
+        hr();
+        log('✅ 生成完成，已触发下载', 'log-ok');
+        log('提示：把 test.mcworld 放到 minecraftWorlds/ 目录即可打开', 'log-warn');
+
+    } catch (err) {
+        log('❌ ' + err.message, 'log-error');
+        console.error(err);
+    }
+});
+
+// ============================================================
+// ③ 读取 .mcstructure
+// ============================================================
+const fileReadStruct = document.getElementById('fileReadStruct');
+const btnReadStruct = document.getElementById('btnReadStruct');
+
+fileReadStruct.addEventListener('change', function () {
+    btnReadStruct.disabled = !this.files[0];
+});
+
+btnReadStruct.addEventListener('click', async function () {
+    const file = fileReadStruct.files[0];
+    if (!file) return;
+
+    clearLog();
+    log('[读取 mcstructure] ' + file.name, 'log-info');
+    log('文件大小: ' + (file.size / 1024).toFixed(1) + ' KB');
+    hr();
+
+    try {
+        const u = window.McCodec;
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+
+        const nbt = u.parseNbt(bytes, 0);
+        const root = nbt.value;
+
+        log('=== 结构信息 ===', 'log-info');
+        const sizeX = root.size.value.items[0];
+        const sizeY = root.size.value.items[1];
+        const sizeZ = root.size.value.items[2];
+        log('尺寸: ' + sizeX + ' × ' + sizeY + ' × ' + sizeZ);
+        log('总方块数: ' + (sizeX * sizeY * sizeZ).toLocaleString());
+
+        if (root.structure_world_origin) {
+            const o = root.structure_world_origin.value.items;
+            log('原点: (' + o[0] + ', ' + o[1] + ', ' + o[2] + ')');
+        }
+        hr();
+
+        log('=== 调色板 ===', 'log-info');
+        const palette = root.structure.value.palette.value.default.value.block_palette.value.items;
+        log('共 ' + palette.length + ' 项');
+        for (let i = 0; i < Math.min(palette.length, 20); i++) {
+            const p = palette[i];
+            const name = p.find(x => x.name === 'name').value.value;
+            log('  ' + i + ': ' + name);
+        }
+        hr();
+
+        log('=== 方块统计 ===', 'log-info');
+        const biItems = root.structure.value.block_indices.value.items;
+        const blockIndices0 = biItems[0].items || biItems[0];
+
+        const counts = {};
+        for (let i = 0; i < blockIndices0.length; i++) {
+            const idx = blockIndices0[i];
+            if (idx < 0) continue;
+            const name = palette[idx].find(x => x.name === 'name').value.value;
+            counts[name] = (counts[name] || 0) + 1;
+        }
+        const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+        for (const [name, count] of sorted.slice(0, 20)) {
+            log('  ' + name + ': ' + count.toLocaleString());
+        }
+        hr();
+
+        log('=== 方块实体 ===', 'log-info');
+        const bpd = root.structure.value.palette.value.default.value.block_position_data;
+        if (bpd && bpd.value) {
+            const keys = Object.keys(bpd.value);
+            log('共 ' + keys.length + ' 个');
+            let shown = 0;
+            for (const key of keys) {
+                if (shown >= 50) {
+                    log('  ... (仅显示前 50 个)');
+                    break;
+                }
+                shown++;
+                const beData = bpd.value[key].value.block_entity_data.value;
+                const id = beData.id ? beData.id.value : '(无)';
+                log('  "' + key + '" → ' + id);
+
+                if (id === 'CommandBlock' && beData.Command) {
+                    log('      指令: ' + beData.Command.value, 'log-ok');
+                }
+                if (id === 'Sign' && beData.FrontText) {
+                    log('      正面: ' + beData.FrontText.value.Text.value, 'log-ok');
+                }
+            }
+        }
+
+        hr();
+        log('✅ 完成', 'log-ok');
+
+    } catch (err) {
+        log('❌ ' + err.message, 'log-error');
+        console.error(err);
+    }
+});
+
+// ============================================================
+// ④ 生成 .mcstructure
+// ============================================================
+document.getElementById('btnWriteStruct').addEventListener('click', function () {
+    clearLog();
+    log('[生成 mcstructure]', 'log-info');
+    hr();
+
+    try {
+        const u = window.McCodec;
+
+        const sizeX = 16, sizeY = 4, sizeZ = 16;
+        const totalBlocks = sizeX * sizeY * sizeZ;
+
+        const palette = [
+            { name: 'minecraft:air', states: {} },
+            { name: 'minecraft:stone', states: {} },
+            { name: 'minecraft:command_block', states: {
+                conditional_bit: { type: 'Byte', value: 0 },
+                facing_direction: { type: 'Int', value: 0 }
+            }}
+        ];
+
+        const indices0 = new Int32Array(totalBlocks).fill(-1);
+
+        for (let x = 0; x < 16; x++) {
+            for (let z = 0; z < 16; z++) {
+                const idx = (x * sizeY + 0) * sizeZ + z;
+                indices0[idx] = 1;
+            }
+        }
+        log('放置石头: 256 个');
+
+        const cmdIdx = (8 * sizeY + 1) * sizeZ + 8;
+        indices0[cmdIdx] = 2;
+        log('放置命令方块 @ (8, 1, 8)');
+
+        const indices1 = new Int32Array(totalBlocks).fill(-1);
+
+        const paletteEntries = palette.map(function (p) {
+            const stateEntries = Object.keys(p.states).map(function (k) {
+                const tag = p.states[k];
+                return { name: k, type: u.NBT_TYPE_IDS[tag.type] || 3, value: tag.value };
+            });
+            return [
+                { name: 'name', type: 8, value: p.name },
+                { name: 'states', type: 10, value: stateEntries },
+                { name: 'version', type: 3, value: 18168865 }
+            ];
+        });
+
+        const be = [
+            { name: 'id', type: 8, value: 'CommandBlock' },
+            { name: 'Command', type: 8, value: 'say hello' },
+            { name: 'CustomName', type: 8, value: '' },
+            { name: 'ExecuteOnFirstTick', type: 1, value: 1 },
+            { name: 'LPCommandMode', type: 3, value: 0 },
+            { name: 'LPCondionalMode', type: 1, value: 0 },
+            { name: 'LPRedstoneMode', type: 1, value: 0 },
+            { name: 'SuccessCount', type: 3, value: 0 },
+            { name: 'TickDelay', type: 3, value: 0 },
+            { name: 'TrackOutput', type: 1, value: 1 },
+            { name: 'Version', type: 3, value: 19 },
+            { name: 'auto', type: 1, value: 1 },
+            { name: 'conditionMet', type: 1, value: 0 },
+            { name: 'powered', type: 1, value: 0 },
+            { name: 'x', type: 3, value: 8 },
+            { name: 'y', type: 3, value: 1 },
+            { name: 'z', type: 3, value: 8 }
+        ];
+
+        // ★ 键是 "sx,sy,sz" 字符串
+        const bpEntries = [
+            {
+                name: '8,1,8',
+                type: 10,
+                value: [
+                    { name: 'block_entity_data', type: 10, value: be }
+                ]
+            }
+        ];
+
+        const root = [
+            { name: 'format_version', type: 3, value: 1 },
+            { name: 'size', type: 9, value: { itemType: 3, items: [sizeX, sizeY, sizeZ] } },
+            { name: 'structure', type: 10, value: [
+                { name: 'block_indices', type: 9, value: { itemType: 9, items: [
+                    { itemType: 3, items: Array.from(indices0) },
+                    { itemType: 3, items: Array.from(indices1) }
+                ]}},
+                { name: 'entities', type: 9, value: { itemType: 10, items: [] } },
+                { name: 'palette', type: 10, value: [
+                    { name: 'default', type: 10, value: [
+                        { name: 'block_palette', type: 9, value: { itemType: 10, items: paletteEntries } },
+                        { name: 'block_position_data', type: 10, value: bpEntries }
+                    ]}
+                ]}
+            ]},
+            { name: 'structure_world_origin', type: 9, value: { itemType: 3, items: [0, 0, 0] } }
+        ];
+
+        const nbtBytes = u.bSerializeBE(root);
+        log('NBT: ' + nbtBytes.length + ' 字节');
+
+        download(nbtBytes, 'test.mcstructure');
+
+        hr();
+        log('✅ 生成完成，已触发下载', 'log-ok');
+        log('提示：把 test.mcstructure 放到 behavior_packs/你的包/structures/ 目录即可加载', 'log-warn');
+
+    } catch (err) {
+        log('❌ ' + err.message, 'log-error');
+        console.error(err);
+    }
+});
+
+// ============================================================
+// 启动检查
+// ============================================================
+(function () {
+    if (typeof window.McCodec === 'undefined') {
+        log('❌ 加载失败：window.McCodec 未定义', 'log-error');
+        log('请确认：', 'log-warn');
+        log('  1. examples/utils.js 已改为 UMD 格式');
+        log('  2. 本页通过 file:// 或 http:// 打开，且 utils.js 路径正确');
+        log('  3. 若通过 file:// 打开，浏览器可能拦截本地 script 加载，请用 http server');
+        return;
+    }
+    log('✅ minecraft-bedrock-codec 已加载', 'log-ok');
+    log('   模块: ' + Object.keys(window.McCodec).length + ' 个导出函数');
+    log('   版本: 3.0 / MC 1.19.10+');
+    hr();
+    log('选择文件或点击按钮开始。');
+})();
+</script>
+
+</body>
+</html>
