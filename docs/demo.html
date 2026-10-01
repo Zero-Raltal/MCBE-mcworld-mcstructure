@@ -150,10 +150,9 @@ function download(bytes, filename) {
 }
 
 // ============================================================
-// 通用：构造命令方块 BE
+// 通用：构造命令方块 BE（结构相对坐标）
 // ============================================================
 function makeCommandBlockBE(sx, sy, sz) {
-    // ★ 字段顺序：id / x / y / z 放最前，游戏解析更稳
     return [
         { name: 'id', type: 8, value: 'CommandBlock' },
         { name: 'x', type: 3, value: sx },
@@ -171,7 +170,7 @@ function makeCommandBlockBE(sx, sy, sz) {
         { name: 'TickDelay', type: 3, value: 0 },
         { name: 'TrackOutput', type: 1, value: 1 },
         { name: 'Version', type: 3, value: 19 },
-        { name: 'auto', type: 1, value: 0 },          // ★ 0 = 红石控制
+        { name: 'auto', type: 1, value: 0 },           // 0 = 红石控制
         { name: 'conditionMet', type: 1, value: 0 },
         { name: 'powered', type: 1, value: 0 }
     ];
@@ -320,23 +319,23 @@ document.getElementById('btnWriteWorld').addEventListener('click', function () {
         }
         log('放置石头: ' + layer0Blocks.length + ' 个');
 
-        // ★ 命令方块：红石控制，朝上
+        // 命令方块：红石控制，朝下
         layer0Blocks.push({
             x: 8, y: 1, z: 8,
             name: 'minecraft:command_block',
             states: {
                 conditional_bit: { type: 'Byte', value: 0 },
-                facing_direction: { type: 'Int', value: 1 }      // ★ 1 = 朝上
+                facing_direction: { type: 'Int', value: 0 }
             }
         });
         log('放置命令方块 @ (8, 1, 8) - 红石控制');
 
-        // ★ 石头按钮：放在命令方块上方
+        // 石头按钮：命令方块上方
         layer0Blocks.push({
             x: 8, y: 2, z: 8,
             name: 'minecraft:stone_button',
             states: {
-                facing_direction: { type: 'Int', value: 1 },     // ★ 朝上（贴在方块顶面）
+                facing_direction: { type: 'Int', value: 1 },
                 button_pressed_bit: { type: 'Byte', value: 0 },
                 toggle_bit: { type: 'Byte', value: 0 }
             }
@@ -346,7 +345,7 @@ document.getElementById('btnWriteWorld').addEventListener('click', function () {
         const subChunkBytes = u.serializeSubChunk(subY, [layer0Blocks]);
         log('SubChunk: ' + subChunkBytes.length + ' 字节');
 
-        // ★ 命令方块 BE（世界坐标）
+        // 命令方块 BE（世界坐标）
         const worldX = 8, worldY = -63, worldZ = 8;
         const beEntries = [
             { name: 'id', type: 8, value: 'CommandBlock' },
@@ -365,7 +364,7 @@ document.getElementById('btnWriteWorld').addEventListener('click', function () {
             { name: 'TickDelay', type: 3, value: 0 },
             { name: 'TrackOutput', type: 1, value: 1 },
             { name: 'Version', type: 3, value: 19 },
-            { name: 'auto', type: 1, value: 0 },              // ★ 红石控制
+            { name: 'auto', type: 1, value: 0 },
             { name: 'conditionMet', type: 1, value: 0 },
             { name: 'powered', type: 1, value: 0 }
         ];
@@ -487,7 +486,6 @@ btnReadStruct.addEventListener('click', async function () {
         log('共 ' + palette.length + ' 项');
         for (let i = 0; i < Math.min(palette.length, 20); i++) {
             const p = palette[i];
-            // ★ 修复：palette 条目是对象 {name: {type, value}, states: {...}, version: {...}}
             const name = p.name.value;
             log('  ' + i + ': ' + name);
         }
@@ -501,7 +499,6 @@ btnReadStruct.addEventListener('click', async function () {
         for (let i = 0; i < blockIndices0.length; i++) {
             const idx = blockIndices0[i];
             if (idx < 0) continue;
-            // ★ 修复：同上
             const name = palette[idx].name.value;
             counts[name] = (counts[name] || 0) + 1;
         }
@@ -568,10 +565,10 @@ document.getElementById('btnWriteStruct').addEventListener('click', function () 
             { name: 'minecraft:stone', states: {} },
             { name: 'minecraft:command_block', states: {
                 conditional_bit: { type: 'Byte', value: 0 },
-                facing_direction: { type: 'Int', value: 1 }          // ★ 朝上
+                facing_direction: { type: 'Int', value: 0 }        // ★ 0 = 朝下
             }},
             { name: 'minecraft:stone_button', states: {
-                facing_direction: { type: 'Int', value: 1 },         // ★ 朝上
+                facing_direction: { type: 'Int', value: 1 },
                 button_pressed_bit: { type: 'Byte', value: 0 },
                 toggle_bit: { type: 'Byte', value: 0 }
             }}
@@ -613,13 +610,17 @@ document.getElementById('btnWriteStruct').addEventListener('click', function () 
             ];
         });
 
-        // ★ 命令方块 BE（结构相对坐标，与键 "8,1,8" 一致）
+        // 命令方块 BE（结构相对坐标）
         const be = makeCommandBlockBE(8, 1, 8);
 
-        // ★ block_position_data：键 = "sx,sy,sz"
+        // ★★★ 关键改动：block_position_data 的键用扁平索引（字符串形式） ★★★
+        // 索引公式：(sx * sizeY + sy) * sizeZ + sz
+        const cmdBlockIndex = (8 * sizeY + 1) * sizeZ + 8;
+        log('命令方块扁平索引: ' + cmdBlockIndex);
+
         const bpEntries = [
             {
-                name: '8,1,8',
+                name: String(cmdBlockIndex),   // ★ 字符串形式的扁平索引
                 type: 10,
                 value: [
                     { name: 'block_entity_data', type: 10, value: be }
@@ -649,7 +650,7 @@ document.getElementById('btnWriteStruct').addEventListener('click', function () 
         const nbtBytes = u.bSerializeBE(root);
         log('NBT: ' + nbtBytes.length + ' 字节');
 
-        // ★ 自检：直接解析回来，确认 BE 存在
+        // 生成后自检
         hr();
         log('=== 生成后自检 ===', 'log-info');
         const check = u.parseNbt(nbtBytes, 0);
