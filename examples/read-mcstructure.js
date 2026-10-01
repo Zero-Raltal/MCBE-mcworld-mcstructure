@@ -28,7 +28,8 @@ function readMcstructure(filePath) {
     console.log('共', palette.length, '项');
     for (let i = 0; i < Math.min(palette.length, 20); i++) {
         const p = palette[i];
-        const name = p.find(x => x.name === 'name').value.value;
+        // ★ 修复：palette 条目是对象 {name: {type, value}, states: {type, value}, version: {type, value}}
+        const name = p.name.value;
         console.log(' ', i, ':', name);
     }
 
@@ -40,7 +41,8 @@ function readMcstructure(filePath) {
     for (let i = 0; i < blockIndices0.length; i++) {
         const idx = blockIndices0[i];
         if (idx < 0) continue;
-        const name = palette[idx].find(x => x.name === 'name').value.value;
+        // ★ 修复：同上
+        const name = palette[idx].name.value;
         counts[name] = (counts[name] || 0) + 1;
     }
     const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
